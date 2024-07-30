@@ -1,1 +1,58 @@
 test
+
+import express from 'express';
+import { exec } from 'child_process';
+
+const app = express();
+const port = 5000;
+
+app.use(express.json());
+
+app.post('/open-eclipse', (req, res) => {
+  // Replace the path with the actual path to your Eclipse executable
+  const eclipsePath = '"C:\\Path\\To\\Eclipse\\eclipse.exe"'; // For Windows
+  // const eclipsePath = '/path/to/eclipse/eclipse'; // For Linux/Mac
+
+  exec(eclipsePath, (error) => {
+    if (error) {
+      console.error(`Error opening Eclipse: ${error}`);
+      return res.status(500).send('Failed to open Eclipse');
+    }
+    res.send('Eclipse opened successfully');
+  });
+});
+
+app.listen(port, () => {
+  console.log(`Server running on http://localhost:${port}`);
+});
+
+
+
+import React from 'react';
+
+const App = () => {
+  const openEclipse = async () => {
+    try {
+      const response = await fetch('http://localhost:5000/open-eclipse', {
+        method: 'POST',
+      });
+      if (response.ok) {
+        console.log('Eclipse opened successfully');
+      } else {
+        console.error('Failed to open Eclipse');
+      }
+    } catch (error) {
+      console.error('Error:', error);
+    }
+  };
+
+  return (
+    <div>
+      <button onClick={openEclipse}>Open Eclipse IDE</button>
+    </div>
+  );
+};
+
+export default App;
+
+

@@ -1,3 +1,23 @@
+ exec(exePath, (error, stdout, stderr) => {
+    if (error) {
+      console.error(`Error: ${error.message}`);
+      return res.status(500).send({ message: 'Failed to open EXE' });
+    }
+    if (stderr) {
+      console.error(`Stderr: ${stderr}`);
+      return res.status(500).send({ message: 'Error in EXE execution' });
+    }
+    console.log(`Stdout: ${stdout}`);
+    res.send({ message: 'EXE opened successfully' });
+  });
+
+
+
+
+
+
+
+
 test
 
 import express from 'express';

@@ -1,3 +1,14 @@
+| **Role**         | **Access Home Page Data** | **Access Reference Pages** | **Display Specific Reference's Values** | **Trigger Print** | **Record Usage of Printed Labels** | **Re-print Label** | **Overwrite API Output** | **Print Test Label** | **Access Admin Page Data** | **Add New Reference** | **Access Approval Page Data** |
+|------------------|---------------------------|----------------------------|----------------------------------------|-------------------|-------------------------------------|---------------------|---------------------------|-----------------------|----------------------------|------------------------|-----------------------------|
+| **USER_READ**    | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | Yes               | Yes                                 | Yes (Freiburg site)  | No                        | No                    | No                         | No                     | No                          |
+| **USER_WRITE**   | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | No                | No                                  | Yes (Newbridge site) | Yes (False)               | Yes                   | No                         | No                     | No                          |
+| **USER_ADMIN**   | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | No                | No                                  | No                   | Yes (True)                | No                    | Yes                        | Yes                    | No                          |
+| **USER_QA**      | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | No                | No                                  | No                   | Yes (False)               | No                    | No                         | No                     | Yes                         |
+
+
+
+
+
 Certainly. Here's the updated matrix with the QA and ADMIN columns switched:
 
 | Functionality                     | USER_READ | USER_WRITE | USER_QA | USER_ADMIN |

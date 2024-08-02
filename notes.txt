@@ -115,6 +115,68 @@ public class WebSocketClientExample extends WebSocketClient {
 
 
 
+
+
+
+
+
+
+
+
+import org.springframework.boot.SpringApplication;
+import org.springframework.boot.autoconfigure.SpringBootApplication;
+import org.springframework.web.reactive.socket.WebSocketMessage;
+import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
+import org.springframework.web.reactive.socket.client.WebSocketClient;
+import reactor.core.publisher.Mono;
+
+import java.net.URI;
+import java.net.URLEncoder;
+import java.nio.charset.StandardCharsets;
+import java.time.Duration;
+import java.util.HashMap;
+import java.util.Map;
+
+@SpringBootApplication
+public class WebSocketClientApplication {
+
+    public static void main(String[] args) {
+        SpringApplication.run(WebSocketClientApplication.class, args);
+        runWebSocketClient();
+    }
+
+    private static String getToken() {
+        return "";
+    }
+
+    private static void runWebSocketClient() {
+        Map<String, String> queryParams = new HashMap<>();
+        queryParams.put("enterpriseId", "111111");
+        queryParams.put("eventTypes", "zoneTransition");
+
+        String queryString = queryParams.entrySet().stream()
+                .map(entry -> entry.getKey() + "=" + URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
+                .reduce((p1, p2) -> p1 + "&" + p2)
+                .orElse("");
+
+        String uri = String.format("wss://abc.com/api/v1/streaming/?%s", queryString);
+
+        WebSocketClient client = new ReactorNettyWebSocketClient();
+
+        client.execute(
+                URI.create(uri),
+                session -> session.receive()
+                        .map(WebSocketMessage::getPayloadAsText)
+                        .doOnNext(System.out::println)
+                        .then())
+                .block(Duration.ofSeconds(10));
+    }
+}
+
+
+
+
+
 import express from 'express';
 import { exec } from 'child_process';
 

@@ -1,86 +1,119 @@
-| **Role**         | **Access Home Page Data** | **Access Reference Pages** | **Display Specific Reference's Values** | **Trigger Print** | **Record Usage of Printed Labels** | **Re-print Label** | **Overwrite API Output** | **Print Test Label** | **Access Admin Page Data** | **Add New Reference** | **Access Approval Page Data** |
-|------------------|---------------------------|----------------------------|----------------------------------------|-------------------|-------------------------------------|---------------------|---------------------------|-----------------------|----------------------------|------------------------|-----------------------------|
-| **USER_READ**    | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | Yes               | Yes                                 | Yes (Freiburg site)  | No                        | No                    | No                         | No                     | No                          |
-| **USER_WRITE**   | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | No                | No                                  | Yes (Newbridge site) | Yes (False)               | Yes                   | No                         | No                     | No                          |
-| **USER_ADMIN**   | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | No                | No                                  | No                   | Yes (True)                | No                    | Yes                        | Yes                    | No                          |
-| **USER_QA**      | Yes (GET)                 | Yes (market, item, batch, site, language) | Yes                                    | No                | No                                  | No                   | Yes (False)               | No                    | No                         | No                     | Yes                         |
+package com.example.websocketclient;
 
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RestController;
 
+@RestController
+public class WebSocketController {
 
-
-
-Certainly. Here's the updated matrix with the QA and ADMIN columns switched:
-
-| Functionality                     | USER_READ | USER_WRITE | USER_QA | USER_ADMIN |
-|-----------------------------------|-----------|------------|---------|------------|
-| Access home page                  | ✓         | ✓          | ✓       | ✓          |
-| Access reference pages            | ✓         | ✓          | ✓       | ✓          |
-| Display reference attributes      | ✓         | ✓          | ✓       | ✓          |
-| Trigger print                     | ✓         | ✓          | ✓       | ✓          |
-| Record label usage                | ✓         | ✓          | ✓       | ✓          |
-| Re-print label (site-specific)    | ✓ (FRG)   | ✓ (NWB)    | ✓       | ✓          |
-| Overwrite API Output to False     | ✗         | ✓          | ✓       | ✗          |
-| Print test label                  | ✗         | ✓          | ✗       | ✓          |
-| Access Admin page                 | ✗         | ✗          | ✗       | ✓          |
-| Overwrite API Output to True      | ✗         | ✗          | ✗       | ✓          |
-| Add new reference                 | ✗         | ✗          | ✗       | ✓          |
-| Access Approval page              | ✗         | ✗          | ✓       | ✗          |
-
-Legend:
-✓ - Has access/permission
-✗ - No access/permission
-FRG - Freiburg site
-NWB - Newbridge site
-
-This revised matrix maintains the same information but with the USER_QA and USER_ADMIN columns swapped as requested. Is there anything else you'd like me to modify or explain about this matrix?
-
-
-
-
-|| Functionality || USER_READ || USER_WRITE || USER_QA || USER_ADMIN ||
-| Access home page | ✓ | ✓ | ✓ | ✓ |
-| Access reference pages | ✓ | ✓ | ✓ | ✓ |
-| Display reference attributes | ✓ | ✓ | ✓ | ✓ |
-| Trigger print | ✓ | ✓ | ✓ | ✓ |
-| Record label usage | ✓ | ✓ | ✓ | ✓ |
-| Re-print label (site-specific) | ✓ (FRG) | ✓ (NWB) | ✓ | ✓ |
-| Overwrite API Output to False | ✗ | ✓ | ✓ | ✗ |
-| Print test label | ✗ | ✓ | ✗ | ✓ |
-| Access Admin page | ✗ | ✗ | ✗ | ✓ |
-| Overwrite API Output to True | ✗ | ✗ | ✗ | ✓ |
-| Add new reference | ✗ | ✗ | ✗ | ✓ |
-| Access Approval page | ✗ | ✗ | ✓ | ✗ |
-
-
-
-{info:title=Legend}
-✓ - Has access/permission
-✗ - No access/permission
-FRG - Freiburg site
-NWB - Newbridge site
-{info}
-
-exec(exePath, (error, stdout, stderr) => {
-    if (error) {
-      console.error(`Error: ${error.message}`);
-      return res.status(500).send({ message: 'Failed to open EXE' });
+    @GetMapping("/connect")
+    public String connectWebSocket() {
+        try {
+            WebSocketClientExample client = new WebSocketClientExample();
+            client.connectBlocking(); // Waits for the connection to be established
+            return "WebSocket connection initiated";
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return "Failed to initiate WebSocket connection: " + e.getMessage();
+        }
     }
-    if (stderr) {
-      console.error(`Stderr: ${stderr}`);
-      return res.status(500).send({ message: 'Error in EXE execution' });
+}
+
+
+
+
+package com.example.websocketclient;
+
+import org.apache.http.client.utils.URIBuilder;
+import org.java_websocket.client.WebSocketClient;
+import org.java_websocket.handshake.ServerHandshake;
+
+import javax.json.Json;
+import javax.json.JsonArrayBuilder;
+import java.net.URI;
+import java.net.URISyntaxException;
+import java.util.HashMap;
+import java.util.Map;
+
+public class WebSocketClientExample extends WebSocketClient {
+
+    public WebSocketClientExample() throws URISyntaxException {
+        super(createUri());
+        addHeaders();
     }
-    console.log(`Stdout: ${stdout}`);
-    res.send({ message: 'EXE opened successfully' });
-  });
+
+    private static URI createUri() throws URISyntaxException {
+        JsonArrayBuilder eventTypes = Json.createArrayBuilder()
+            .add("zoneTransition");
+
+        Map<String, String> queryParams = new HashMap<>();
+        queryParams.put("enterpriseId", "111111");
+        queryParams.put("eventTypes", eventTypes.build().toString());
+
+        URIBuilder uriBuilder = new URIBuilder("wss://abc.com/api/v1/streaming/");
+        queryParams.forEach(uriBuilder::addParameter);
+
+        return uriBuilder.build();
+    }
+
+    private void addHeaders() {
+        this.addHeader("Authorization", "Bearer " + getToken());
+        this.addHeader("x-dsp-selected-tenant-role", "na");
+    }
+
+    private static String getToken() {
+        return ""; // Implement your token retrieval logic here
+    }
+
+    @Override
+    public void onOpen(ServerHandshake handshakedata) {
+        System.out.println("Opened connection");
+    }
+
+    @Override
+    public void onMessage(String message) {
+        System.out.println("Received: " + message);
+    }
+
+    @Override
+    public void onClose(int code, String reason, boolean remote) {
+        System.out.println("Closed with exit code " + code + " additional info: " + reason);
+    }
+
+    @Override
+    public void onError(Exception ex) {
+        System.err.println("An error occurred:" + ex);
+    }
+}
 
 
-e
+<dependencies>
+    <dependency>
+        <groupId>org.springframework.boot</groupId>
+        <artifactId>spring-boot-starter-web</artifactId>
+    </dependency>
+    <dependency>
+        <groupId>org.java-websocket</groupId>
+        <artifactId>Java-WebSocket</artifactId>
+        <version>1.5.2</version>
+    </dependency>
+    <dependency>
+        <groupId>org.glassfish</groupId>
+        <artifactId>javax.json</artifactId>
+        <version>1.1.4</version>
+    </dependency>
+</dependencies>
 
 
 
 
 
-test
+
+
+
+
+
+
 
 import express from 'express';
 import { exec } from 'child_process';

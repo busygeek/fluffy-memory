@@ -12,3 +12,16 @@ This tutorial covers below points.
 
 
 
+|| Functionality || USER_READ || USER_WRITE || USER_QA || USER_ADMIN ||
+| Access home page | ✓ | ✓ | ✓ | ✓ |
+| Access reference pages | ✓ | ✓ | ✓ | ✓ |
+| Display reference attributes | ✓ | ✓ | ✓ | ✓ |
+| Trigger print | ✓ | ✓ | ✓ | ✓ |
+| Record label usage | ✓ | ✓ | ✓ | ✓ |
+| Re-print label (site-specific) | ✓ (FRG) | ✓ (NWB) | ✓ | ✓ |
+| Overwrite API Output to False | ✗ | ✓ | ✓ | ✗ |
+| Print test label | ✗ | ✓ | ✗ | ✓ |
+| Access Admin page | ✗ | ✗ | ✗ | ✓ |
+| Overwrite API Output to True | ✗ | ✗ | ✗ | ✓ |
+| Add new reference | ✗ | ✗ | ✗ | ✓ |
+| Access Approval page | ✗ | ✗ | ✓ | ✗ |

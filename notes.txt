@@ -1,4 +1,55 @@
- exec(exePath, (error, stdout, stderr) => {
+Certainly. Here's the updated matrix with the QA and ADMIN columns switched:
+
+| Functionality                     | USER_READ | USER_WRITE | USER_QA | USER_ADMIN |
+|-----------------------------------|-----------|------------|---------|------------|
+| Access home page                  | ✓         | ✓          | ✓       | ✓          |
+| Access reference pages            | ✓         | ✓          | ✓       | ✓          |
+| Display reference attributes      | ✓         | ✓          | ✓       | ✓          |
+| Trigger print                     | ✓         | ✓          | ✓       | ✓          |
+| Record label usage                | ✓         | ✓          | ✓       | ✓          |
+| Re-print label (site-specific)    | ✓ (FRG)   | ✓ (NWB)    | ✓       | ✓          |
+| Overwrite API Output to False     | ✗         | ✓          | ✓       | ✗          |
+| Print test label                  | ✗         | ✓          | ✗       | ✓          |
+| Access Admin page                 | ✗         | ✗          | ✗       | ✓          |
+| Overwrite API Output to True      | ✗         | ✗          | ✗       | ✓          |
+| Add new reference                 | ✗         | ✗          | ✗       | ✓          |
+| Access Approval page              | ✗         | ✗          | ✓       | ✗          |
+
+Legend:
+✓ - Has access/permission
+✗ - No access/permission
+FRG - Freiburg site
+NWB - Newbridge site
+
+This revised matrix maintains the same information but with the USER_QA and USER_ADMIN columns swapped as requested. Is there anything else you'd like me to modify or explain about this matrix?
+
+
+
+
+|| Functionality || USER_READ || USER_WRITE || USER_QA || USER_ADMIN ||
+| Access home page | ✓ | ✓ | ✓ | ✓ |
+| Access reference pages | ✓ | ✓ | ✓ | ✓ |
+| Display reference attributes | ✓ | ✓ | ✓ | ✓ |
+| Trigger print | ✓ | ✓ | ✓ | ✓ |
+| Record label usage | ✓ | ✓ | ✓ | ✓ |
+| Re-print label (site-specific) | ✓ (FRG) | ✓ (NWB) | ✓ | ✓ |
+| Overwrite API Output to False | ✗ | ✓ | ✓ | ✗ |
+| Print test label | ✗ | ✓ | ✗ | ✓ |
+| Access Admin page | ✗ | ✗ | ✗ | ✓ |
+| Overwrite API Output to True | ✗ | ✗ | ✗ | ✓ |
+| Add new reference | ✗ | ✗ | ✗ | ✓ |
+| Access Approval page | ✗ | ✗ | ✓ | ✗ |
+
+
+
+{info:title=Legend}
+✓ - Has access/permission
+✗ - No access/permission
+FRG - Freiburg site
+NWB - Newbridge site
+{info}
+
+exec(exePath, (error, stdout, stderr) => {
     if (error) {
       console.error(`Error: ${error.message}`);
       return res.status(500).send({ message: 'Failed to open EXE' });
@@ -12,7 +63,7 @@
   });
 
 
-
+e
 
 
 

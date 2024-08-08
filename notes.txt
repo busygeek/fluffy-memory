@@ -1,3 +1,125 @@
+8/8
+
+import org.springframework.web.reactive.function.client.WebClient;  
+import org.springframework.web.reactive.function.client.WebClientResponseException;  
+import reactor.core.publisher.Flux;  
+import reactor.core.publisher.Mono;  
+  
+import java.net.URI;  
+import java.util.HashMap;  
+import java.util.Map;  
+  
+public class WebSocketClient {  
+   private static final String BASE_URL = "wss://abc.com/api/v1ing/";  
+   private static final String ENTERPRISE_ID = "111111";  
+   private static final String[] EVENT_TYPES = {"zoneTransition"};  
+  
+   public static void main(String[] args) {  
+      WebClient webClient = WebClient.builder()  
+          .baseUrl(BASE_URL)  
+          .build();  
+  
+      Map<String, String> queryParams = new HashMap<>();  
+      queryParams.put("enterpriseId", ENTERPRISE_ID);  
+      queryParams.put("eventTypes", String.join(",", EVENT_TYPES));  
+  
+      URI uri = URI.create(BASE_URL + "?" + queryParams);  
+  
+      Mono<String> token = Mono.just(getToken());  
+  
+      token.flatMap(tokenValue -> {  
+        WebClient.RequestHeadersSpec<?> requestHeadersSpec = webClient.get()  
+             .uri(uri)  
+             .header("Authorization", "Bearer " + tokenValue)  
+             .header("x-dsp-selected-tenant-role", "na");  
+  
+        return requestHeadersSpec.retrieve()  
+             .bodyToFlux(String.class)  
+             .doOnNext(System.out::println)  
+             .then();  
+      }).block();  
+   }  
+  
+   private static String getToken() {  
+      // Implement your token generation logic here  
+      return "";  
+   }  
+}
+
+
+
+
+
+import com.google.gson.Gson;
+import com.google.gson.JsonObject;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.MediaType;
+import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.RequestMapping;
+import org.springframework.web.bind.annotation.RestController;
+import org.springframework.web.reactive.function.client.WebClient;
+import reactor.core.publisher.Flux;
+
+import java.util.HashMap;
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/v1/streaming")
+public class StreamingController {
+
+    private static final String TOKEN = getToken();
+
+    @GetMapping
+    public Flux<JsonObject> streamEvents() {
+        Map<String, Object> queryParams = new HashMap<>();
+        queryParams.put("enterpriseId", 111111);
+        queryParams.put("eventTypes", new String[] {"zoneTransition"});
+
+        return WebClient.create("wss://abc.com")
+                .get()
+                .uri(uriBuilder -> uriBuilder
+                        .path("/api/v1/streaming/")
+                        .queryParams(getQueryParams(queryParams))
+                        .build())
+                .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
+                .header("x-dsp-selected-tenant-role", "na")
+                .accept(MediaType.APPLICATION_STREAM_JSON)
+                .retrieve()
+                .bodyToFlux(JsonObject.class)
+                .doOnNext(this::printResponse);
+    }
+
+    private void printResponse(JsonObject response) {
+        System.out.println(response);
+    }
+
+    private static String getToken() {
+        return "";
+    }
+
+    private static Map<String, String> getQueryParams(Map<String, Object> params) {
+        Map<String, String> queryParams = new HashMap<>();
+        for (Map.Entry<String, Object> entry : params.entrySet()) {
+            if (entry.getValue() instanceof String[]) {
+                queryParams.put(entry.getKey(), String.join(",", (String[]) entry.getValue()));
+            } else {
+                queryParams.put(entry.getKey(), String.valueOf(entry.getValue()));
+            }
+        }
+        return queryParams;
+    }
+}
+
+
+
+
+
+
+
+
+-------------------------
+
+
 package com.example.websocketclient;
 
 import org.springframework.web.bind.annotation.GetMapping;

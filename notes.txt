@@ -1,357 +1,182 @@
-8/8
 
-import org.springframework.web.reactive.function.client.WebClient;  
-import org.springframework.web.reactive.function.client.WebClientResponseException;  
-import reactor.core.publisher.Flux;  
-import reactor.core.publisher.Mono;  
-  
-import java.net.URI;  
-import java.util.HashMap;  
-import java.util.Map;  
-  
-public class WebSocketClient {  
-   private static final String BASE_URL = "wss://abc.com/api/v1ing/";  
-   private static final String ENTERPRISE_ID = "111111";  
-   private static final String[] EVENT_TYPES = {"zoneTransition"};  
-  
-   public static void main(String[] args) {  
-      WebClient webClient = WebClient.builder()  
-          .baseUrl(BASE_URL)  
-          .build();  
-  
-      Map<String, String> queryParams = new HashMap<>();  
-      queryParams.put("enterpriseId", ENTERPRISE_ID);  
-      queryParams.put("eventTypes", String.join(",", EVENT_TYPES));  
-  
-      URI uri = URI.create(BASE_URL + "?" + queryParams);  
-  
-      Mono<String> token = Mono.just(getToken());  
-  
-      token.flatMap(tokenValue -> {  
-        WebClient.RequestHeadersSpec<?> requestHeadersSpec = webClient.get()  
-             .uri(uri)  
-             .header("Authorization", "Bearer " + tokenValue)  
-             .header("x-dsp-selected-tenant-role", "na");  
-  
-        return requestHeadersSpec.retrieve()  
-             .bodyToFlux(String.class)  
-             .doOnNext(System.out::println)  
-             .then();  
-      }).block();  
-   }  
-  
-   private static String getToken() {  
-      // Implement your token generation logic here  
-      return "";  
-   }  
+
+```java
+import lombok.Getter;
+import lombok.Setter;
+
+import javax.persistence.*;
+import java.time.Instant;
+
+@Entity
+@Table(name = "child_table_1")
+@Getter
+@Setter
+public class ChildEntity1 {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Integer attributeValueId;  // Primary Key: attributeValueId
+    private Integer attributeId;  // attributeId
+    private Integer referenceId;  // Foreign Key: referenceId
+    private Integer statusId;  // statusID
+    private String value;  // value field
+    private String finalValue;  // finalValue field
+    private Instant createTime;  // Creation timestamp (Instant)
+    private Instant modifyTime;  // Modify timestamp (Instant)
+    private String userId;  // User ID
+
+    @ManyToOne
+    @JoinColumn(name = "referenceId", referencedColumnName = "referenceId", insertable = false, updatable = false)
+    private ParentEntity parent;
 }
+```
 
+### Updated `ChildEntity2` Class with New Fields
 
+```java
+import lombok.Getter;
+import lombok.Setter;
 
+import javax.persistence.*;
+import java.time.Instant;
 
+@Entity
+@Table(name = "child_table_2")
+@Getter
+@Setter
+public class ChildEntity2 {
+    @Id
+    @GeneratedValue(strategy = GenerationType.IDENTITY)
+    private Integer attributeValueId;  // Primary Key: attributeValueId
+    private Integer attributeId;  // attributeId
+    private Integer referenceId;  // Foreign Key: referenceId
+    private Integer statusId;  // statusID
+    private String value;  // value field
+    private String finalValue;  // finalValue field
+    private Instant createTime;  // Creation timestamp (Instant)
+    private Instant modifyTime;  // Modify timestamp (Instant)
+    private String userId;  // User ID
 
-import com.google.gson.Gson;
-import com.google.gson.JsonObject;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.MediaType;
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RequestMapping;
-import org.springframework.web.bind.annotation.RestController;
-import org.springframework.web.reactive.function.client.WebClient;
-import reactor.core.publisher.Flux;
+    @ManyToOne
+    @JoinColumn(name = "referenceId", referencedColumnName = "referenceId", insertable = false, updatable = false)
+    private ParentEntity parent;
+}
+```
 
-import java.util.HashMap;
-import java.util.Map;
+### Updated `processMessages` Method
 
-@RestController
-@RequestMapping("/api/v1/streaming")
-public class StreamingController {
+Now, I’ll adjust the `processMessages` method so that it sets the new fields for both `ChildEntity1` and `ChildEntity2`:
 
-    private static final String TOKEN = getToken();
+```java
+@Transactional
+public void processMessages() {
+    List<String> messages = new ArrayList<>();
+    messageQueue.drainTo(messages, BATCH_SIZE);
 
-    @GetMapping
-    public Flux<JsonObject> streamEvents() {
-        Map<String, Object> queryParams = new HashMap<>();
-        queryParams.put("enterpriseId", 111111);
-        queryParams.put("eventTypes", new String[] {"zoneTransition"});
-
-        return WebClient.create("wss://abc.com")
-                .get()
-                .uri(uriBuilder -> uriBuilder
-                        .path("/api/v1/streaming/")
-                        .queryParams(getQueryParams(queryParams))
-                        .build())
-                .header(HttpHeaders.AUTHORIZATION, "Bearer " + TOKEN)
-                .header("x-dsp-selected-tenant-role", "na")
-                .accept(MediaType.APPLICATION_STREAM_JSON)
-                .retrieve()
-                .bodyToFlux(JsonObject.class)
-                .doOnNext(this::printResponse);
+    if (messages.isEmpty()) {
+        return;
     }
 
-    private void printResponse(JsonObject response) {
-        System.out.println(response);
+    LinkedHashMap<String, ParentEntity> parentMap = new LinkedHashMap<>();
+    List<ChildEntity1> children1ToSave = new ArrayList<>();
+    List<ChildEntity2> children2ToSave = new ArrayList<>();
+
+    // Collect unique refValues and refTypeIds from messages
+    Set<String> refValues = new LinkedHashSet<>();
+    Set<Integer> refTypeIds = new LinkedHashSet<>();
+    for (String message : messages) {
+        refValues.add(extractRefValue(message));
+        refTypeIds.add(extractRefTypeId(message));
     }
 
-    private static String getToken() {
-        return "";
+    // Batch fetch existing parents by refValue and refTypeId in one query
+    List<ParentEntity> existingParents = parentRepository.findByRefValueInAndRefTypeIdIn(refValues, refTypeIds);
+    for (ParentEntity parent : existingParents) {
+        parentMap.put(parent.getRefValue(), parent);
     }
 
-    private static Map<String, String> getQueryParams(Map<String, Object> params) {
-        Map<String, String> queryParams = new HashMap<>();
-        for (Map.Entry<String, Object> entry : params.entrySet()) {
-            if (entry.getValue() instanceof String[]) {
-                queryParams.put(entry.getKey(), String.join(",", (String[]) entry.getValue()));
-            } else {
-                queryParams.put(entry.getKey(), String.valueOf(entry.getValue()));
-            }
+    // Process messages in order, ensuring the latest parent data is used
+    for (String message : messages) {
+        String refValue = extractRefValue(message);  // refValue from message
+        Integer refTypeId = extractRefTypeId(message);  // refTypeId from message
+        String userId = extractUserId(message);
+        Integer attributeId = extractAttributeId(message);  // Extract attributeId
+        Integer statusId = extractStatusId(message);  // Extract statusId
+        String value = extractValue(message);  // Extract value field
+        String finalValue = extractFinalValue(message);  // Extract finalValue field
+
+        // Get the parent if it exists, or create a new one if not
+        ParentEntity parent = parentMap.get(refValue);
+        if (parent == null) {
+            // Create a new parent entity only if it doesn't exist
+            parent = new ParentEntity();
+            parent.setRefValue(refValue);  // Set refValue
+            parent.setRefTypeId(refTypeId);  // Set refTypeId
+            parent.setCreateTime(Instant.now());  // Set createTime only for new parents
+            parentMap.put(refValue, parent); // Add the new parent to the map
         }
-        return queryParams;
-    }
-}
 
+        // Always update the parent fields (existing or new)
+        parent.setUserId(userId);
+        parent.setUpdateTime(Instant.now());  // Always update the updateTime
 
+		
+		 // Check if ChildEntity1 exists
+        ChildEntity1 existingChild1 = childRepository1.findByAttributeIdAndReferenceId(attributeId, parent.getReferenceId());
+        if (existingChild1 != null) {
+            // Update existing child1 fields (except attributeValueId, attributeId, createTime)
+            existingChild1.setStatusId(statusId);
+            existingChild1.setValue(value);
+            existingChild1.setFinalValue(finalValue);
+            existingChild1.setModifyTime(Instant.now());
+            existingChild1.setUserId(userId);
+            children1ToSave.add(existingChild1);  // Add to save list
+        } else {
+            // Create new child1 entity if not found
+            ChildEntity1 child1 = new ChildEntity1();
+            child1.setParent(parent);
+            child1.setAttributeId(attributeId);
+            child1.setReferenceId(parent.getReferenceId());  // Set referenceId from parent
+            child1.setStatusId(statusId);
+            child1.setValue(value);
+            child1.setFinalValue(finalValue);
+            child1.setCreateTime(Instant.now());
+            child1.setModifyTime(Instant.now());
+            child1.setUserId(userId);
+            children1ToSave.add(child1);  // Add to save list
+        }
 
-
-
-
-
-
--------------------------
-
-
-package com.example.websocketclient;
-
-import org.springframework.web.bind.annotation.GetMapping;
-import org.springframework.web.bind.annotation.RestController;
-
-@RestController
-public class WebSocketController {
-
-    @GetMapping("/connect")
-    public String connectWebSocket() {
-        try {
-            WebSocketClientExample client = new WebSocketClientExample();
-            client.connectBlocking(); // Waits for the connection to be established
-            return "WebSocket connection initiated";
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            return "Failed to initiate WebSocket connection: " + e.getMessage();
+        // Check if ChildEntity2 exists
+        ChildEntity2 existingChild2 = childRepository2.findByAttributeIdAndReferenceId(attributeId, parent.getReferenceId());
+        if (existingChild2 != null) {
+            // Update existing child2 fields (except attributeValueId, attributeId, createTime)
+            existingChild2.setStatusId(statusId);
+            existingChild2.setValue(value);
+            existingChild2.setFinalValue(finalValue);
+            existingChild2.setModifyTime(Instant.now());
+            existingChild2.setUserId(userId);
+            children2ToSave.add(existingChild2);  // Add to save list
+        } else {
+            // Create new child2 entity if not found
+            ChildEntity2 child2 = new ChildEntity2();
+            child2.setParent(parent);
+            child2.setAttributeId(attributeId);
+            child2.setReferenceId(parent.getReferenceId());  // Set referenceId from parent
+            child2.setStatusId(statusId);
+            child2.setValue(value);
+            child2.setFinalValue(finalValue);
+            child2.setCreateTime(Instant.now());
+            child2.setModifyTime(Instant.now());
+            child2.setUserId(userId);
+            children2ToSave.add(child2);  // Add to save list
         }
     }
+
+    // Save all parents (whether new or existing)
+    parentRepository.saveAll(parentMap.values());
+    parentRepository.flush(); // Ensure parents are persisted and IDs are generated for new ones
+
+    // After parents are saved, update the children with the correct parent ID
+    childRepository1.saveAll(children1ToSave);
+    childRepository2.saveAll(children2ToSave);
 }
-
-
-
-
-package com.example.websocketclient;
-
-import org.apache.http.client.utils.URIBuilder;
-import org.java_websocket.client.WebSocketClient;
-import org.java_websocket.handshake.ServerHandshake;
-
-import javax.json.Json;
-import javax.json.JsonArrayBuilder;
-import java.net.URI;
-import java.net.URISyntaxException;
-import java.util.HashMap;
-import java.util.Map;
-
-public class WebSocketClientExample extends WebSocketClient {
-
-    public WebSocketClientExample() throws URISyntaxException {
-        super(createUri());
-        addHeaders();
-    }
-
-    private static URI createUri() throws URISyntaxException {
-        JsonArrayBuilder eventTypes = Json.createArrayBuilder()
-            .add("zoneTransition");
-
-        Map<String, String> queryParams = new HashMap<>();
-        queryParams.put("enterpriseId", "111111");
-        queryParams.put("eventTypes", eventTypes.build().toString());
-
-        URIBuilder uriBuilder = new URIBuilder("wss://abc.com/api/v1/streaming/");
-        queryParams.forEach(uriBuilder::addParameter);
-
-        return uriBuilder.build();
-    }
-
-    private void addHeaders() {
-        this.addHeader("Authorization", "Bearer " + getToken());
-        this.addHeader("x-dsp-selected-tenant-role", "na");
-    }
-
-    private static String getToken() {
-        return ""; // Implement your token retrieval logic here
-    }
-
-    @Override
-    public void onOpen(ServerHandshake handshakedata) {
-        System.out.println("Opened connection");
-    }
-
-    @Override
-    public void onMessage(String message) {
-        System.out.println("Received: " + message);
-    }
-
-    @Override
-    public void onClose(int code, String reason, boolean remote) {
-        System.out.println("Closed with exit code " + code + " additional info: " + reason);
-    }
-
-    @Override
-    public void onError(Exception ex) {
-        System.err.println("An error occurred:" + ex);
-    }
-}
-
-
-<dependencies>
-    <dependency>
-        <groupId>org.springframework.boot</groupId>
-        <artifactId>spring-boot-starter-web</artifactId>
-    </dependency>
-    <dependency>
-        <groupId>org.java-websocket</groupId>
-        <artifactId>Java-WebSocket</artifactId>
-        <version>1.5.2</version>
-    </dependency>
-    <dependency>
-        <groupId>org.glassfish</groupId>
-        <artifactId>javax.json</artifactId>
-        <version>1.1.4</version>
-    </dependency>
-</dependencies>
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-import org.springframework.boot.SpringApplication;
-import org.springframework.boot.autoconfigure.SpringBootApplication;
-import org.springframework.web.reactive.socket.WebSocketMessage;
-import org.springframework.web.reactive.socket.client.ReactorNettyWebSocketClient;
-import org.springframework.web.reactive.socket.client.WebSocketClient;
-import reactor.core.publisher.Mono;
-
-import java.net.URI;
-import java.net.URLEncoder;
-import java.nio.charset.StandardCharsets;
-import java.time.Duration;
-import java.util.HashMap;
-import java.util.Map;
-
-@SpringBootApplication
-public class WebSocketClientApplication {
-
-    public static void main(String[] args) {
-        SpringApplication.run(WebSocketClientApplication.class, args);
-        runWebSocketClient();
-    }
-
-    private static String getToken() {
-        return "";
-    }
-
-    private static void runWebSocketClient() {
-        Map<String, String> queryParams = new HashMap<>();
-        queryParams.put("enterpriseId", "111111");
-        queryParams.put("eventTypes", "zoneTransition");
-
-        String queryString = queryParams.entrySet().stream()
-                .map(entry -> entry.getKey() + "=" + URLEncoder.encode(entry.getValue(), StandardCharsets.UTF_8))
-                .reduce((p1, p2) -> p1 + "&" + p2)
-                .orElse("");
-
-        String uri = String.format("wss://abc.com/api/v1/streaming/?%s", queryString);
-
-        WebSocketClient client = new ReactorNettyWebSocketClient();
-
-        client.execute(
-                URI.create(uri),
-                session -> session.receive()
-                        .map(WebSocketMessage::getPayloadAsText)
-                        .doOnNext(System.out::println)
-                        .then())
-                .block(Duration.ofSeconds(10));
-    }
-}
-
-
-
-
-
-import express from 'express';
-import { exec } from 'child_process';
-
-const app = express();
-const port = 5000;
-
-app.use(express.json());
-
-app.post('/open-eclipse', (req, res) => {
-  // Replace the path with the actual path to your Eclipse executable
-  const eclipsePath = '"C:\\Path\\To\\Eclipse\\eclipse.exe"'; // For Windows
-  // const eclipsePath = '/path/to/eclipse/eclipse'; // For Linux/Mac
-
-  exec(eclipsePath, (error) => {
-    if (error) {
-      console.error(`Error opening Eclipse: ${error}`);
-      return res.status(500).send('Failed to open Eclipse');
-    }
-    res.send('Eclipse opened successfully');
-  });
-});
-
-app.listen(port, () => {
-  console.log(`Server running on http://localhost:${port}`);
-});
-
-
-
-import React from 'react';
-
-const App = () => {
-  const openEclipse = async () => {
-    try {
-      const response = await fetch('http://localhost:5000/open-eclipse', {
-        method: 'POST',
-      });
-      if (response.ok) {
-        console.log('Eclipse opened successfully');
-      } else {
-        console.error('Failed to open Eclipse');
-      }
-    } catch (error) {
-      console.error('Error:', error);
-    }
-  };
-
-  return (
-    <div>
-      <button onClick={openEclipse}>Open Eclipse IDE</button>
-    </div>
-  );
-};
-
-export default App;
-
-
+```

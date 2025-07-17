@@ -1,0 +1,207 @@
+{
+    "info": {
+        "_postman_id": "3a4b5c6d-7e8f-9a0b-1c2d-3e4f5a6b7c8d",
+        "name": "User Management API",
+        "description": "Postman collection for testing the User Management REST API with Spring Boot, including all HTTP methods and authentication.",
+        "schema": "https://schema.getpostman.com/json/collection/v2.1.0/collection.json"
+    },
+    "item": [
+        {
+            "name": "Authentication",
+            "item": [
+                {
+                    "name": "Login (Get JWT Token)",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\"username\": \"admin\", \"password\": \"password\"}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/api/users/auth/login",
+                            "host": ["{{baseUrl}}"],
+                            "path": ["api", "users", "auth", "login"]
+                        },
+                        "description": "Authenticates with username 'admin' and password 'password' to obtain a dynamic JWT token. Updates the 'token' environment variable with the response."
+                    },
+                    "response": [],
+                    "event": [
+                        {
+                            "listen": "test",
+                            "script": {
+                                "exec": [
+                                    "const response = pm.response.json();",
+                                    "if (response && response.startsWith('Bearer ')) {",
+                                    "    pm.environment.set('token', response.replace('Bearer ', ''));",
+                                    "}"
+                                ],
+                                "type": "text/javascript"
+                            }
+                        }
+                    ]
+                }
+            ]
+        },
+        {
+            "name": "User Operations",
+            "item": [
+                {
+                    "name": "Get All Users",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/users",
+                            "host": ["{{baseUrl}}"],
+                            "path": ["api", "users"]
+                        },
+                        "description": "Retrieves a list of all users. Requires JWT token in Authorization header."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Get User by ID",
+                    "request": {
+                        "method": "GET",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/users/1",
+                            "host": ["{{baseUrl}}"],
+                            "path": ["api", "users", "1"]
+                        },
+                        "description": "Retrieves a user by ID (e.g., 1). Replace '1' with the desired user ID. Returns 404 if not found."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Create User",
+                    "request": {
+                        "method": "POST",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\"name\": \"New User\", \"email\": \"new.user@example.com\", \"role\": \"USER\"}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/api/users",
+                            "host": ["{{baseUrl}}"],
+                            "path": ["api", "users"]
+                        },
+                        "description": "Creates a new user. The 'id' is auto-generated (timestamp). Returns 201 Created on success."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Update User (PUT)",
+                    "request": {
+                        "method": "PUT",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\"name\": \"Updated User\", \"email\": \"updated.user@example.com\", \"role\": \"MANAGER\"}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/api/users/1",
+                            "host": ["{{baseUrl}}"],
+                            "path": ["api", "users", "1"]
+                        },
+                        "description": "Updates all fields of a user with the specified ID (e.g., 1). Returns 404 if not found."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Patch User",
+                    "request": {
+                        "method": "PATCH",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}"
+                            },
+                            {
+                                "key": "Content-Type",
+                                "value": "application/json"
+                            }
+                        ],
+                        "body": {
+                            "mode": "raw",
+                            "raw": "{\"name\": \"Patched User\"}"
+                        },
+                        "url": {
+                            "raw": "{{baseUrl}}/api/users/1",
+                            "host": ["{{baseUrl}}"],
+                            "path": ["api", "users", "1"]
+                        },
+                        "description": "Partially updates a user with the specified ID (e.g., 1). Only provided fields are updated. Returns 404 if not found."
+                    },
+                    "response": []
+                },
+                {
+                    "name": "Delete User",
+                    "request": {
+                        "method": "DELETE",
+                        "header": [
+                            {
+                                "key": "Authorization",
+                                "value": "Bearer {{token}}"
+                            }
+                        ],
+                        "url": {
+                            "raw": "{{baseUrl}}/api/users/1",
+                            "host": ["{{baseUrl}}"],
+                            "path": ["api", "users", "1"]
+                        },
+                        "description": "Deletes a user with the specified ID (e.g., 1). Returns 204 No Content on success, 404 if not found."
+                    },
+                    "response": []
+                }
+            ]
+        }
+    ],
+    "variable": [
+        {
+            "key": "baseUrl",
+            "value": "http://localhost:8080",
+            "description": "Base URL for the API"
+        },
+        {
+            "key": "token",
+            "value": "eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiJhZG1pbiIsImlhdCI6MTcyMTIwNDk5NiwiZXhwIjozMzI3ODA0OTk2fQ.4y0Z0f1W3b8z7X9v2k5j9q8r6t4y3u2i1o9p8q7w6e5",
+            "description": "JWT token for authentication (static or dynamic)"
+        }
+    ]
+}

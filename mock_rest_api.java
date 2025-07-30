@@ -1,4 +1,163 @@
-// pom.xml
+// Generic CRUD Controller
+// src/main/java/com/mockapi/controller/GenericCrudController.java
+package com.mockapi.controller;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.mockapi.exception.MockApiException;
+import com.mockapi.model.ApiResponse;
+import com.mockapi.service.FileStorageService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import jakarta.annotation.PostConstruct;
+import java.util.*;
+
+@RestController
+@RequestMapping("/api/data")
+@RequiredArgsConstructor
+@Slf4j
+public class GenericCrudController {
+    
+    private final FileStorageService fileStorage;
+    
+    @PostConstruct
+    public void init() {
+        fileStorage.createDataDirectory();
+    }
+    
+    // Get all collections
+    @GetMapping("/collections")
+    public ResponseEntity<ApiResponse> getAllCollections() {
+        List<String> collections = fileStorage.listCollections();
+        Map<String, Object> result = Map.of(
+            "collections", collections,
+            "count", collections.size()
+        );
+        log.info("Retrieved {} collections", collections.size());
+        return ResponseEntity.ok(ApiResponse.success(result, "Retrieved " + collections.size() + " collections"));
+    }
+    
+    // Get all items from a collection (stored as single data.json file)
+    @GetMapping("/{collection}")
+    public ResponseEntity<ApiResponse> getAllItems(@PathVariable String collection) {
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        Map<String, Object> result = Map.of(
+            "collection", collection,
+            "items", items,
+            "count", items.size()
+        );
+        log.info("Retrieved {} items from collection: {}", items.size(), collection);
+        return ResponseEntity.ok(ApiResponse.success(result, "Retrieved " + items.size() + " items from " + collection));
+    }
+    
+    // Get single item by ID (can be stored as individual file or from collection data)
+    @GetMapping("/{collection}/{id}")
+    public ResponseEntity<ApiResponse> getItem(@PathVariable String collection, @PathVariable String id) {
+        // First try to get individual item file
+        @SuppressWarnings("unchecked")
+        Map<String, Object> item = fileStorage.readItemFromCollection(collection, id, Map.class);
+        
+        if (item != null) {
+            log.info("Retrieved item {} from individual file in collection: {}", id, collection);
+            return ResponseEntity.ok(ApiResponse.success(item));
+        }
+        
+        // Fallback to collection data.json
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        Optional<Map<String, Object>> foundItem = items.stream()
+            .filter(i -> id.equals(String.valueOf(i.get("id"))))
+            .findFirst();
+            
+        if (foundItem.isEmpty()) {
+            log.warn("Item with id {} not found in collection: {}", id, collection);
+            throw new MockApiException(404, "Item with id " + id + " not found in " + collection);
+        }
+        
+        log.info("Retrieved item {} from collection data file: {}", id, collection);
+        return ResponseEntity.ok(ApiResponse.success(foundItem.get()));
+    }
+    
+    // Create new item
+    @PostMapping("/{collection}")
+    public ResponseEntity<ApiResponse> createItem(@PathVariable String collection, 
+                                                 @RequestBody Map<String, Object> item,
+                                                 @RequestParam(defaultValue = "false") boolean individualFile) {
+        // Generate ID if not provided
+        if (!item.containsKey("id")) {
+            String newId = UUID.randomUUID().toString();
+            item.put("id", newId);
+        }
+        
+        String itemId = String.valueOf(item.get("id"));
+        item.put("createdAt", new Date());
+        
+        if (individualFile) {
+            // Store as individual file
+            fileStorage.writeItemToCollection(collection, itemId, item);
+            log.info("Created item {} as individual file in collection: {}", itemId, collection);
+        } else {
+            // Store in collection data.json
+            List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+                new TypeReference<List<Map<String, Object>>>() {});
+            items.add(item);
+            fileStorage.writeCollectionData(collection, items);
+            log.info("Created item {} in collection data file: {}", itemId, collection);
+        }
+        
+        return ResponseEntity.status(201).body(ApiResponse.custom(201, "Item created successfully in " + collection, item, 
+            Map.of("storage", individualFile ? "individual_file" : "collection_file")));
+    }
+    
+    // Update item
+    @PutMapping("/{collection}/{id}")
+    public ResponseEntity<ApiResponse> updateItem(@PathVariable String collection, 
+                                                 @PathVariable String id,
+                                                 @RequestBody Map<String, Object> updatedItem) {
+        updatedItem.put("id", id);
+        updatedItem.put("updatedAt", new Date());
+        
+        // Try individual file first
+        @SuppressWarnings("unchecked")
+        Map<String, Object> existingItem = fileStorage.readItemFromCollection(collection, id, Map.class);
+        
+        if (existingItem != null) {
+            fileStorage.writeItemToCollection(collection, id, updatedItem);
+            log.info("Updated item {} as individual file in collection: {}", id, collection);
+            return ResponseEntity.ok(ApiResponse.success(updatedItem, "Item updated successfully in " + collection));
+        }
+        
+        // Fallback to collection data.json
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        for (int i = 0; i < items.size(); i++) {
+            Map<String, Object> item = items.get(i);
+            if (id.equals(String.valueOf(item.get("id")))) {
+                items.set(i, updatedItem);
+                fileStorage.writeCollectionData(collection, items);
+                log.info("Updated item {} in collection data file: {}", id, collection);
+                return ResponseEntity.ok(ApiResponse.success(updatedItem, "Item updated successfully in " + collection));
+            }
+        }
+        
+        log.warn("Attempted to update non-existent item {} in collection: {}", id, collection);
+        throw new MockApiException(404, "Item with id " + id + " not found in " + collection);
+    }
+    
+    // Delete item
+    @DeleteMapping("/{collection}/{id}")
+    public ResponseEntity<ApiResponse> deleteItem(@PathVariable String collection, @PathVariable String id) {
+        // Try individual file first
+        boolean deletedFromFile = fileStorage.deleteItemFromCollection(collection, id);
+        
+        if (deletedFromFile) {
+            // pom.xml
 <?xml version="1.0" encoding="UTF-8"?>
 <project xmlns="http://maven.apache.org/POM/4.0.0" 
          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
@@ -27,6 +186,15 @@
         <dependency>
             <groupId>com.fasterxml.jackson.core</groupId>
             <artifactId>jackson-databind</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>com.fasterxml.jackson.datatype</groupId>
+            <artifactId>jackson-datatype-jsr310</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>org.projectlombok</groupId>
+            <artifactId>lombok</artifactId>
+            <optional>true</optional>
         </dependency>
         <dependency>
             <groupId>org.springframework.boot</groupId>
@@ -58,37 +226,88 @@ public class MockRestApiApplication {
     }
 }
 
+// Configuration Class for ObjectMapper and other beans
+// src/main/java/com/mockapi/config/AppConfig.java
+package com.mockapi.config;
+
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.databind.SerializationFeature;
+import com.fasterxml.jackson.datatype.jsr310.JavaTimeModule;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Configuration;
+import org.springframework.context.annotation.Primary;
+
+@Configuration
+public class AppConfig {
+    
+    @Bean
+    @Primary
+    public ObjectMapper objectMapper() {
+        ObjectMapper mapper = new ObjectMapper();
+        mapper.registerModule(new JavaTimeModule());
+        mapper.disable(SerializationFeature.WRITE_DATES_AS_TIMESTAMPS);
+        mapper.disable(SerializationFeature.WRITE_DURATIONS_AS_TIMESTAMPS);
+        return mapper;
+    }
+}
+
 // Generic Response Model
 // src/main/java/com/mockapi/model/ApiResponse.java
 package com.mockapi.model;
 
 import com.fasterxml.jackson.annotation.JsonInclude;
+import lombok.Builder;
+import lombok.With;
+
 import java.time.LocalDateTime;
 import java.util.Map;
 
+@Builder
+@With
 @JsonInclude(JsonInclude.Include.NON_NULL)
 public record ApiResponse(
     int status,
     String message,
     Object data,
-    LocalDateTime timestamp,
+    @Builder.Default LocalDateTime timestamp,
     String path,
     Map<String, Object> metadata
 ) {
     public static ApiResponse success(Object data) {
-        return new ApiResponse(200, "Success", data, LocalDateTime.now(), null, null);
+        return ApiResponse.builder()
+                .status(200)
+                .message("Success")
+                .data(data)
+                .timestamp(LocalDateTime.now())
+                .build();
     }
     
     public static ApiResponse success(Object data, String message) {
-        return new ApiResponse(200, message, data, LocalDateTime.now(), null, null);
+        return ApiResponse.builder()
+                .status(200)
+                .message(message)
+                .data(data)
+                .timestamp(LocalDateTime.now())
+                .build();
     }
     
     public static ApiResponse error(int status, String message, String path) {
-        return new ApiResponse(status, message, null, LocalDateTime.now(), path, null);
+        return ApiResponse.builder()
+                .status(status)
+                .message(message)
+                .timestamp(LocalDateTime.now())
+                .path(path)
+                .build();
     }
     
     public static ApiResponse custom(int status, String message, Object data, Map<String, Object> metadata) {
-        return new ApiResponse(status, message, data, LocalDateTime.now(), null, metadata);
+        return ApiResponse.builder()
+                .status(status)
+                .message(message)
+                .data(data)
+                .timestamp(LocalDateTime.now())
+                .metadata(metadata)
+                .build();
     }
 }
 
@@ -96,16 +315,15 @@ public record ApiResponse(
 // src/main/java/com/mockapi/exception/MockApiException.java
 package com.mockapi.exception;
 
+import lombok.Getter;
+
+@Getter
 public class MockApiException extends RuntimeException {
     private final int statusCode;
     
     public MockApiException(int statusCode, String message) {
         super(message);
         this.statusCode = statusCode;
-    }
-    
-    public int getStatusCode() {
-        return statusCode;
     }
 }
 
@@ -116,6 +334,8 @@ package com.mockapi.service;
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mockapi.exception.MockApiException;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.File;
@@ -126,22 +346,22 @@ import java.nio.file.Paths;
 import java.util.*;
 
 @Service
+@RequiredArgsConstructor
+@Slf4j
 public class FileStorageService {
     
-    private final ObjectMapper objectMapper = new ObjectMapper();
+    private final ObjectMapper objectMapper;
     private final String dataDirectory = "mock-data";
     
-    public FileStorageService() {
-        createDataDirectory();
-    }
-    
-    private void createDataDirectory() {
+    public void createDataDirectory() {
         try {
             Path path = Paths.get(dataDirectory);
             if (!Files.exists(path)) {
                 Files.createDirectories(path);
+                log.info("Created data directory: {}", dataDirectory);
             }
         } catch (IOException e) {
+            log.error("Failed to create data directory: {}", e.getMessage());
             throw new MockApiException(500, "Failed to create data directory: " + e.getMessage());
         }
     }
@@ -151,8 +371,10 @@ public class FileStorageService {
             Path collectionPath = Paths.get(dataDirectory, collection);
             if (!Files.exists(collectionPath)) {
                 Files.createDirectories(collectionPath);
+                log.info("Created collection directory: {}", collectionPath);
             }
         } catch (IOException e) {
+            log.error("Failed to create collection directory: {}", e.getMessage());
             throw new MockApiException(500, "Failed to create collection directory: " + e.getMessage());
         }
     }
@@ -162,12 +384,16 @@ public class FileStorageService {
         createCollectionDirectory(collection);
         File file = new File(dataDirectory + File.separator + collection, "data.json");
         if (!file.exists()) {
+            log.debug("Collection data file not found: {}", file.getPath());
             return new ArrayList<>();
         }
         
         try {
-            return objectMapper.readValue(file, typeRef);
+            List<T> data = objectMapper.readValue(file, typeRef);
+            log.debug("Read {} items from collection: {}", data.size(), collection);
+            return data;
         } catch (IOException e) {
+            log.error("Failed to read collection data from {}: {}", file.getPath(), e.getMessage());
             throw new MockApiException(500, "Failed to read collection data: " + e.getMessage());
         }
     }
@@ -177,7 +403,9 @@ public class FileStorageService {
         File file = new File(dataDirectory + File.separator + collection, "data.json");
         try {
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, data);
+            log.debug("Wrote {} items to collection: {}", data.size(), collection);
         } catch (IOException e) {
+            log.error("Failed to write collection data to {}: {}", file.getPath(), e.getMessage());
             throw new MockApiException(500, "Failed to write collection data: " + e.getMessage());
         }
     }
@@ -187,12 +415,16 @@ public class FileStorageService {
         createCollectionDirectory(collection);
         File file = new File(dataDirectory + File.separator + collection, itemId + ".json");
         if (!file.exists()) {
+            log.debug("Item file not found: {}", file.getPath());
             return null;
         }
         
         try {
-            return objectMapper.readValue(file, clazz);
+            T item = objectMapper.readValue(file, clazz);
+            log.debug("Read item {} from collection: {}", itemId, collection);
+            return item;
         } catch (IOException e) {
+            log.error("Failed to read item from {}: {}", file.getPath(), e.getMessage());
             throw new MockApiException(500, "Failed to read item from collection: " + e.getMessage());
         }
     }
@@ -202,14 +434,22 @@ public class FileStorageService {
         File file = new File(dataDirectory + File.separator + collection, itemId + ".json");
         try {
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, data);
+            log.debug("Wrote item {} to collection: {}", itemId, collection);
         } catch (IOException e) {
+            log.error("Failed to write item to {}: {}", file.getPath(), e.getMessage());
             throw new MockApiException(500, "Failed to write item to collection: " + e.getMessage());
         }
     }
     
     public boolean deleteItemFromCollection(String collection, String itemId) {
         File file = new File(dataDirectory + File.separator + collection, itemId + ".json");
-        return file.delete();
+        boolean deleted = file.delete();
+        if (deleted) {
+            log.debug("Deleted item {} from collection: {}", itemId, collection);
+        } else {
+            log.debug("Failed to delete item {} from collection: {}", itemId, collection);
+        }
+        return deleted;
     }
     
     public List<String> getItemIdsFromCollection(String collection) {
@@ -220,21 +460,28 @@ public class FileStorageService {
             return new ArrayList<>();
         }
         
-        return Arrays.stream(files)
+        List<String> itemIds = Arrays.stream(files)
                 .map(filename -> filename.substring(0, filename.lastIndexOf(".json")))
                 .toList();
+        
+        log.debug("Found {} individual items in collection: {}", itemIds.size(), collection);
+        return itemIds;
     }
     
     // Legacy methods for backward compatibility and custom responses
     public <T> List<T> readFromFile(String filename, TypeReference<List<T>> typeRef) {
         File file = new File(dataDirectory, filename);
         if (!file.exists()) {
+            log.debug("File not found: {}", file.getPath());
             return new ArrayList<>();
         }
         
         try {
-            return objectMapper.readValue(file, typeRef);
+            List<T> data = objectMapper.readValue(file, typeRef);
+            log.debug("Read {} items from file: {}", data.size(), filename);
+            return data;
         } catch (IOException e) {
+            log.error("Failed to read from file {}: {}", filename, e.getMessage());
             throw new MockApiException(500, "Failed to read from file: " + e.getMessage());
         }
     }
@@ -243,7 +490,9 @@ public class FileStorageService {
         File file = new File(dataDirectory, filename);
         try {
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, data);
+            log.debug("Wrote {} items to file: {}", data.size(), filename);
         } catch (IOException e) {
+            log.error("Failed to write to file {}: {}", filename, e.getMessage());
             throw new MockApiException(500, "Failed to write to file: " + e.getMessage());
         }
     }
@@ -251,12 +500,16 @@ public class FileStorageService {
     public <T> T readSingleFromFile(String filename, Class<T> clazz) {
         File file = new File(dataDirectory, filename);
         if (!file.exists()) {
+            log.debug("Single file not found: {}", file.getPath());
             return null;
         }
         
         try {
-            return objectMapper.readValue(file, clazz);
+            T data = objectMapper.readValue(file, clazz);
+            log.debug("Read single item from file: {}", filename);
+            return data;
         } catch (IOException e) {
+            log.error("Failed to read single from file {}: {}", filename, e.getMessage());
             throw new MockApiException(500, "Failed to read from file: " + e.getMessage());
         }
     }
@@ -265,26 +518,38 @@ public class FileStorageService {
         File file = new File(dataDirectory, filename);
         try {
             objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, data);
+            log.debug("Wrote single item to file: {}", filename);
         } catch (IOException e) {
+            log.error("Failed to write single to file {}: {}", filename, e.getMessage());
             throw new MockApiException(500, "Failed to write to file: " + e.getMessage());
         }
     }
     
     public boolean deleteFile(String filename) {
         File file = new File(dataDirectory, filename);
-        return file.delete();
+        boolean deleted = file.delete();
+        if (deleted) {
+            log.debug("Deleted file: {}", filename);
+        } else {
+            log.debug("Failed to delete file: {}", filename);
+        }
+        return deleted;
     }
     
     public List<String> listCollections() {
         File dir = new File(dataDirectory);
         String[] collections = dir.list((current, name) -> new File(current, name).isDirectory());
-        return collections != null ? Arrays.asList(collections) : new ArrayList<>();
+        List<String> result = collections != null ? Arrays.asList(collections) : new ArrayList<>();
+        log.debug("Found {} collections", result.size());
+        return result;
     }
     
     public List<String> listFiles() {
         File dir = new File(dataDirectory);
         String[] files = dir.list((current, name) -> new File(current, name).isFile());
-        return files != null ? Arrays.asList(files) : new ArrayList<>();
+        List<String> result = files != null ? Arrays.asList(files) : new ArrayList<>();
+        log.debug("Found {} files", result.size());
+        return result;
     }
 }
 

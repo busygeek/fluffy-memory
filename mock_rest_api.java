@@ -146,6 +146,86 @@ public class FileStorageService {
         }
     }
     
+    private void createCollectionDirectory(String collection) {
+        try {
+            Path collectionPath = Paths.get(dataDirectory, collection);
+            if (!Files.exists(collectionPath)) {
+                Files.createDirectories(collectionPath);
+            }
+        } catch (IOException e) {
+            throw new MockApiException(500, "Failed to create collection directory: " + e.getMessage());
+        }
+    }
+    
+    // Collection-based methods (each collection has its own directory)
+    public <T> List<T> readCollectionData(String collection, TypeReference<List<T>> typeRef) {
+        createCollectionDirectory(collection);
+        File file = new File(dataDirectory + File.separator + collection, "data.json");
+        if (!file.exists()) {
+            return new ArrayList<>();
+        }
+        
+        try {
+            return objectMapper.readValue(file, typeRef);
+        } catch (IOException e) {
+            throw new MockApiException(500, "Failed to read collection data: " + e.getMessage());
+        }
+    }
+    
+    public <T> void writeCollectionData(String collection, List<T> data) {
+        createCollectionDirectory(collection);
+        File file = new File(dataDirectory + File.separator + collection, "data.json");
+        try {
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, data);
+        } catch (IOException e) {
+            throw new MockApiException(500, "Failed to write collection data: " + e.getMessage());
+        }
+    }
+    
+    // Individual item methods (store each item as separate file in collection directory)
+    public <T> T readItemFromCollection(String collection, String itemId, Class<T> clazz) {
+        createCollectionDirectory(collection);
+        File file = new File(dataDirectory + File.separator + collection, itemId + ".json");
+        if (!file.exists()) {
+            return null;
+        }
+        
+        try {
+            return objectMapper.readValue(file, clazz);
+        } catch (IOException e) {
+            throw new MockApiException(500, "Failed to read item from collection: " + e.getMessage());
+        }
+    }
+    
+    public <T> void writeItemToCollection(String collection, String itemId, T data) {
+        createCollectionDirectory(collection);
+        File file = new File(dataDirectory + File.separator + collection, itemId + ".json");
+        try {
+            objectMapper.writerWithDefaultPrettyPrinter().writeValue(file, data);
+        } catch (IOException e) {
+            throw new MockApiException(500, "Failed to write item to collection: " + e.getMessage());
+        }
+    }
+    
+    public boolean deleteItemFromCollection(String collection, String itemId) {
+        File file = new File(dataDirectory + File.separator + collection, itemId + ".json");
+        return file.delete();
+    }
+    
+    public List<String> getItemIdsFromCollection(String collection) {
+        createCollectionDirectory(collection);
+        File collectionDir = new File(dataDirectory, collection);
+        String[] files = collectionDir.list((dir, name) -> name.endsWith(".json") && !name.equals("data.json"));
+        if (files == null) {
+            return new ArrayList<>();
+        }
+        
+        return Arrays.stream(files)
+                .map(filename -> filename.substring(0, filename.lastIndexOf(".json")))
+                .toList();
+    }
+    
+    // Legacy methods for backward compatibility and custom responses
     public <T> List<T> readFromFile(String filename, TypeReference<List<T>> typeRef) {
         File file = new File(dataDirectory, filename);
         if (!file.exists()) {
@@ -195,9 +275,15 @@ public class FileStorageService {
         return file.delete();
     }
     
+    public List<String> listCollections() {
+        File dir = new File(dataDirectory);
+        String[] collections = dir.list((current, name) -> new File(current, name).isDirectory());
+        return collections != null ? Arrays.asList(collections) : new ArrayList<>();
+    }
+    
     public List<String> listFiles() {
         File dir = new File(dataDirectory);
-        String[] files = dir.list();
+        String[] files = dir.list((current, name) -> new File(current, name).isFile());
         return files != null ? Arrays.asList(files) : new ArrayList<>();
     }
 }
@@ -223,52 +309,84 @@ public class GenericCrudController {
     @Autowired
     private FileStorageService fileStorage;
     
-    // Get all items from a collection
-    @GetMapping("/{collection}")
-    public ResponseEntity<ApiResponse> getAllItems(@PathVariable String collection) {
-        String filename = collection + ".json";
-        List<Map<String, Object>> items = fileStorage.readFromFile(filename, 
-            new TypeReference<List<Map<String, Object>>>() {});
-        return ResponseEntity.ok(ApiResponse.success(items, "Retrieved " + items.size() + " items"));
+    // Get all collections
+    @GetMapping("/collections")
+    public ResponseEntity<ApiResponse> getAllCollections() {
+        List<String> collections = fileStorage.listCollections();
+        Map<String, Object> result = Map.of(
+            "collections", collections,
+            "count", collections.size()
+        );
+        return ResponseEntity.ok(ApiResponse.success(result, "Retrieved " + collections.size() + " collections"));
     }
     
-    // Get single item by ID
-    @GetMapping("/{collection}/{id}")
-    public ResponseEntity<ApiResponse> getItem(@PathVariable String collection, @PathVariable String id) {
-        String filename = collection + ".json";
-        List<Map<String, Object>> items = fileStorage.readFromFile(filename, 
+    // Get all items from a collection (stored as single data.json file)
+    @GetMapping("/{collection}")
+    public ResponseEntity<ApiResponse> getAllItems(@PathVariable String collection) {
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
             new TypeReference<List<Map<String, Object>>>() {});
         
-        Optional<Map<String, Object>> item = items.stream()
+        Map<String, Object> result = Map.of(
+            "collection", collection,
+            "items", items,
+            "count", items.size()
+        );
+        return ResponseEntity.ok(ApiResponse.success(result, "Retrieved " + items.size() + " items from " + collection));
+    }
+    
+    // Get single item by ID (can be stored as individual file or from collection data)
+    @GetMapping("/{collection}/{id}")
+    public ResponseEntity<ApiResponse> getItem(@PathVariable String collection, @PathVariable String id) {
+        // First try to get individual item file
+        @SuppressWarnings("unchecked")
+        Map<String, Object> item = fileStorage.readItemFromCollection(collection, id, Map.class);
+        
+        if (item != null) {
+            return ResponseEntity.ok(ApiResponse.success(item));
+        }
+        
+        // Fallback to collection data.json
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        Optional<Map<String, Object>> foundItem = items.stream()
             .filter(i -> id.equals(String.valueOf(i.get("id"))))
             .findFirst();
             
-        if (item.isEmpty()) {
+        if (foundItem.isEmpty()) {
             throw new MockApiException(404, "Item with id " + id + " not found in " + collection);
         }
         
-        return ResponseEntity.ok(ApiResponse.success(item.get()));
+        return ResponseEntity.ok(ApiResponse.success(foundItem.get()));
     }
     
     // Create new item
     @PostMapping("/{collection}")
     public ResponseEntity<ApiResponse> createItem(@PathVariable String collection, 
-                                                 @RequestBody Map<String, Object> item) {
-        String filename = collection + ".json";
-        List<Map<String, Object>> items = fileStorage.readFromFile(filename, 
-            new TypeReference<List<Map<String, Object>>>() {});
-        
+                                                 @RequestBody Map<String, Object> item,
+                                                 @RequestParam(defaultValue = "false") boolean individualFile) {
         // Generate ID if not provided
         if (!item.containsKey("id")) {
             String newId = UUID.randomUUID().toString();
             item.put("id", newId);
         }
         
+        String itemId = String.valueOf(item.get("id"));
         item.put("createdAt", new Date());
-        items.add(item);
-        fileStorage.writeToFile(filename, items);
         
-        return ResponseEntity.status(201).body(ApiResponse.custom(201, "Item created successfully", item, null));
+        if (individualFile) {
+            // Store as individual file
+            fileStorage.writeItemToCollection(collection, itemId, item);
+        } else {
+            // Store in collection data.json
+            List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+                new TypeReference<List<Map<String, Object>>>() {});
+            items.add(item);
+            fileStorage.writeCollectionData(collection, items);
+        }
+        
+        return ResponseEntity.status(201).body(ApiResponse.custom(201, "Item created successfully in " + collection, item, 
+            Map.of("storage", individualFile ? "individual_file" : "collection_file")));
     }
     
     // Update item
@@ -276,18 +394,28 @@ public class GenericCrudController {
     public ResponseEntity<ApiResponse> updateItem(@PathVariable String collection, 
                                                  @PathVariable String id,
                                                  @RequestBody Map<String, Object> updatedItem) {
-        String filename = collection + ".json";
-        List<Map<String, Object>> items = fileStorage.readFromFile(filename, 
+        updatedItem.put("id", id);
+        updatedItem.put("updatedAt", new Date());
+        
+        // Try individual file first
+        @SuppressWarnings("unchecked")
+        Map<String, Object> existingItem = fileStorage.readItemFromCollection(collection, id, Map.class);
+        
+        if (existingItem != null) {
+            fileStorage.writeItemToCollection(collection, id, updatedItem);
+            return ResponseEntity.ok(ApiResponse.success(updatedItem, "Item updated successfully in " + collection));
+        }
+        
+        // Fallback to collection data.json
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
             new TypeReference<List<Map<String, Object>>>() {});
         
         for (int i = 0; i < items.size(); i++) {
             Map<String, Object> item = items.get(i);
             if (id.equals(String.valueOf(item.get("id")))) {
-                updatedItem.put("id", id);
-                updatedItem.put("updatedAt", new Date());
                 items.set(i, updatedItem);
-                fileStorage.writeToFile(filename, items);
-                return ResponseEntity.ok(ApiResponse.success(updatedItem, "Item updated successfully"));
+                fileStorage.writeCollectionData(collection, items);
+                return ResponseEntity.ok(ApiResponse.success(updatedItem, "Item updated successfully in " + collection));
             }
         }
         
@@ -297,8 +425,15 @@ public class GenericCrudController {
     // Delete item
     @DeleteMapping("/{collection}/{id}")
     public ResponseEntity<ApiResponse> deleteItem(@PathVariable String collection, @PathVariable String id) {
-        String filename = collection + ".json";
-        List<Map<String, Object>> items = fileStorage.readFromFile(filename, 
+        // Try individual file first
+        boolean deletedFromFile = fileStorage.deleteItemFromCollection(collection, id);
+        
+        if (deletedFromFile) {
+            return ResponseEntity.ok(ApiResponse.success(null, "Item deleted successfully from " + collection));
+        }
+        
+        // Fallback to collection data.json
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
             new TypeReference<List<Map<String, Object>>>() {});
         
         boolean removed = items.removeIf(item -> id.equals(String.valueOf(item.get("id"))));
@@ -307,8 +442,35 @@ public class GenericCrudController {
             throw new MockApiException(404, "Item with id " + id + " not found in " + collection);
         }
         
-        fileStorage.writeToFile(filename, items);
-        return ResponseEntity.ok(ApiResponse.success(null, "Item deleted successfully"));
+        fileStorage.writeCollectionData(collection, items);
+        return ResponseEntity.ok(ApiResponse.success(null, "Item deleted successfully from " + collection));
+    }
+    
+    // Get all item IDs from a collection
+    @GetMapping("/{collection}/ids")
+    public ResponseEntity<ApiResponse> getItemIds(@PathVariable String collection) {
+        List<String> itemIds = fileStorage.getItemIdsFromCollection(collection);
+        
+        // Also check collection data.json for additional IDs
+        List<Map<String, Object>> collectionItems = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        Set<String> allIds = new HashSet<>(itemIds);
+        collectionItems.forEach(item -> {
+            if (item.get("id") != null) {
+                allIds.add(String.valueOf(item.get("id")));
+            }
+        });
+        
+        Map<String, Object> result = Map.of(
+            "collection", collection,
+            "itemIds", allIds.stream().sorted().toList(),
+            "count", allIds.size(),
+            "individualFiles", itemIds.size(),
+            "collectionFile", collectionItems.size()
+        );
+        
+        return ResponseEntity.ok(ApiResponse.success(result, "Retrieved " + allIds.size() + " item IDs from " + collection));
     }
 }
 

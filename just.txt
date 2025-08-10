@@ -1,0 +1,296 @@
+# 🔍 Mock REST API - Search Documentation
+
+A simple and powerful search API for your JSON data with support for nested objects and arrays.
+
+## 🚀 Quick Start
+
+### Basic Search
+Search your card data with simple field matching:
+
+```bash
+POST /api/search/cards
+Content-Type: application/json
+
+{
+  "card.cardType": "Mastercard World Elite",
+  "card.cardHolderName": "Alice Smith"
+}
+```
+
+### Quick Single Field Search
+```bash
+GET /api/search/cards?field=card.cardType&value=Mastercard
+```
+
+## 📋 Sample Data Structure
+
+Our examples use this card data structure:
+
+```json
+{
+  "card": {
+    "cardNumber": "4111-1111-1111-1111",
+    "cardType": "Mastercard World Elite",
+    "expiryDate": "12/27",
+    "cardHolderName": "Alice Smith"
+  },
+  "cardBenefits": [
+    {
+      "benefitName": "Airport Lounge Access",
+      "description": "Complimentary access to over 1,000 airport lounges worldwide.",
+      "status": "Active",
+      "usageLimitPerYear": 8
+    },
+    {
+      "benefitName": "Travel Insurance",
+      "description": "Automatic travel insurance when full fare is paid with the card.",
+      "coverageAmount": 1000000,
+      "status": "Active"
+    }
+  ],
+  "merchantInstructions": {
+    "allowedTransactionTypes": ["purchase", "refund", "pre-authorization"],
+    "restrictedMerchantCategories": [
+      "adult entertainment",
+      "unregulated cryptocurrency exchanges"
+    ],
+    "currencyAcceptance": ["USD", "EUR", "CAD"],
+    "authorizationRules": {
+      "captureTimeLimitHours": 24,
+      "partialAuthorizations": false
+    }
+  },
+  "benefitServiceInstructions": {
+    "contactMethods": {
+      "phone": "+1-800-555-1234",
+      "email": "benefits-support@examplecard.com"
+    },
+    "claimProcess": {
+      "steps": [
+        "Log into the benefits portal or call customer service.",
+        "Submit supporting documents (e.g., receipts, travel itinerary)."
+      ],
+      "documentationRequired": [
+        "Proof of purchase with card",
+        "Valid identification"
+      ]
+    },
+    "serviceHours": {
+      "weekdays": "08:00 - 20:00 EST",
+      "weekends": "10:00 - 16:00 EST"
+    }
+  }
+}
+```
+
+## 🎯 Search Examples
+
+### 1. Basic Field Search
+Find cards by card holder name:
+```json
+{
+  "card.cardHolderName": "Alice Smith"
+}
+```
+
+### 2. Nested Object Search
+Search in deeply nested objects:
+```json
+{
+  "merchantInstructions.authorizationRules.captureTimeLimitHours": 24,
+  "benefitServiceInstructions.serviceHours.weekdays": "08:00 - 20:00 EST"
+}
+```
+
+### 3. Array Search - Find Specific Benefits
+Search inside the cardBenefits array:
+```json
+{
+  "cardBenefits[].benefitName": "Airport Lounge Access",
+  "cardBenefits[].status": "Active"
+}
+```
+
+### 4. Array Search - Find by Coverage Amount
+```json
+{
+  "cardBenefits[].coverageAmount": 1000000
+}
+```
+
+### 5. Array Search - Multiple Criteria
+Find cards with active travel insurance:
+```json
+{
+  "cardBenefits[].benefitName": "Travel Insurance",
+  "cardBenefits[].status": "Active"
+}
+```
+
+### 6. Search in Arrays of Simple Values
+Find cards that accept specific currencies:
+```json
+{
+  "merchantInstructions.allowedTransactionTypes": "purchase",
+  "merchantInstructions.currencyAcceptance": "USD"
+}
+```
+
+### 7. Search in Nested Arrays
+Find specific documentation requirements:
+```json
+{
+  "benefitServiceInstructions.claimProcess.documentationRequired": "Valid identification"
+}
+```
+
+### 8. Complex Multi-Level Search
+Combine different search criteria:
+```json
+{
+  "card.cardType": "Mastercard World Elite",
+  "cardBenefits[].status": "Active",
+  "merchantInstructions.authorizationRules.partialAuthorizations": false,
+  "benefitServiceInstructions.contactMethods.phone": "+1-800-555-1234"
+}
+```
+
+## 📚 Search Patterns Guide
+
+### Basic Patterns
+| Pattern | Example | Description |
+|---------|---------|-------------|
+| `"field"` | `"card.cardType"` | Simple nested field |
+| `"field[]"` | `"cardBenefits[]"` | Entire array |
+| `"field[].subfield"` | `"cardBenefits[].status"` | Field in array objects |
+
+### Real Examples with Card Data
+
+#### ✅ Card Information
+```json
+{
+  "card.cardNumber": "4111-1111-1111-1111",
+  "card.expiryDate": "12/27"
+}
+```
+
+#### ✅ Benefits Search
+```json
+{
+  "cardBenefits[].benefitName": "Concierge Service",
+  "cardBenefits[].usageLimitPerYear": 8
+}
+```
+
+#### ✅ Merchant Rules
+```json
+{
+  "merchantInstructions.allowedTransactionTypes": "refund",
+  "merchantInstructions.restrictedMerchantCategories": "adult entertainment"
+}
+```
+
+#### ✅ Service Instructions
+```json
+{
+  "benefitServiceInstructions.contactMethods.email": "benefits-support@examplecard.com",
+  "benefitServiceInstructions.claimProcess.steps": "Log into the benefits portal"
+}
+```
+
+## 🔧 API Endpoints
+
+### POST /api/search/{collection}
+Main search endpoint with JSON criteria
+
+**Request:**
+```json
+{
+  "field1": "value1",
+  "nested.field": "value2", 
+  "array[].field": "value3"
+}
+```
+
+**Response:**
+```json
+{
+  "status": 200,
+  "message": "Found 2 results",
+  "data": {
+    "results": [
+      {
+        "card": { ... },
+        "_source": "cards/alice-card.json"
+      }
+    ],
+    "metadata": {
+      "totalResults": 2,
+      "page": 1,
+      "pageSize": 10,
+      "executionTimeMs": 15
+    }
+  }
+}
+```
+
+### GET /api/search/{collection}
+Quick single field search
+
+```bash
+GET /api/search/cards?field=card.cardType&value=Mastercard&page=1&pageSize=5
+```
+
+### GET /api/search/examples
+Get complete documentation and examples
+
+## 💡 Pro Tips
+
+### ✅ DO's
+- **Nested Fields**: Use dots → `"card.cardHolderName"`
+- **Array Search**: Use brackets → `"cardBenefits[].status"`
+- **Mix Types**: Numbers, strings, booleans all work
+- **Case Insensitive**: "Alice" matches "alice" 
+- **Partial Matching**: "Mastercard" matches "Mastercard World Elite"
+
+### ❌ Common Mistakes
+- Don't forget `[]` for array searches
+- Don't use quotes around numbers: ✅ `123` not ❌ `"123"`
+- Don't forget dots for nested fields
+
+### 🎯 Search Logic
+- **AND Logic**: All criteria must match
+- **Flexible Matching**: Handles strings, numbers, booleans
+- **Source Tracking**: See which file each result came from
+- **Smart Arrays**: Searches through all array elements automatically
+
+## 📊 Response Features
+
+- **Pagination**: Use `page` and `pageSize` parameters
+- **Source Tracking**: Each result shows `_source` field
+- **Performance**: `executionTimeMs` in metadata
+- **Flexible**: Works with both collection files and individual files
+
+## 🚀 Getting Started
+
+1. **Simple Search**: Start with basic field matching
+2. **Nested Fields**: Use dot notation for nested objects  
+3. **Array Search**: Add `[]` notation for arrays
+4. **Combine**: Mix different criteria as needed
+
+**Example Progression:**
+```json
+// Start simple
+{"card.cardType": "Mastercard"}
+
+// Add nested field  
+{"card.cardType": "Mastercard", "card.cardHolderName": "Alice"}
+
+// Add array search
+{"card.cardType": "Mastercard", "cardBenefits[].status": "Active"}
+
+// Go complex
+{"card.cardType": "Mastercard", "cardBenefits[].status": "Active", "merchantInstructions.currencyAcceptance": "USD"}
+```
+
+Happy searching! 🎉

@@ -906,6 +906,343 @@ public class GlobalExceptionHandler {
     }
 }
 
+
+
+// Simple Search Service
+// src/main/java/com/mockapi/service/SimpleSearchService.java
+package com.mockapi.service;
+
+import com.fasterxml.jackson.core.type.TypeReference;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.util.*;
+import java.util.stream.Collectors;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class SimpleSearchService {
+    
+    private final FileStorageService fileStorageService;
+    
+    public Map<String, Object> search(String collection, Map<String, Object> searchCriteria, int page, int pageSize) {
+        long startTime = System.currentTimeMillis();
+        
+        List<Map<String, Object>> allResults = new ArrayList<>();
+        Map<String, String> resultSources = new HashMap<>(); // Track where each result came from
+        
+        // Search in collection data.json file
+        List<Map<String, Object>> collectionData = fileStorageService.readCollectionData(
+            collection, new TypeReference<List<Map<String, Object>>>() {});
+        
+        for (Map<String, Object> item : collectionData) {
+            if (matches(item, searchCriteria)) {
+                allResults.add(item);
+                String itemId = item.get("id") != null ? String.valueOf(item.get("id")) : 
+                              UUID.randomUUID().toString();
+                resultSources.put(itemId, collection + "/data.json");
+            }
+        }
+        
+        // Search in individual files
+        List<String> itemIds = fileStorageService.getItemIdsFromCollection(collection);
+        for (String itemId : itemIds) {
+            @SuppressWarnings("unchecked")
+            Map<String, Object> item = fileStorageService.readItemFromCollection(collection, itemId, Map.class);
+            if (item != null && matches(item, searchCriteria)) {
+                // Remove from collection results if exists (prefer individual file)
+                allResults.removeIf(existing -> 
+                    itemId.equals(String.valueOf(existing.get("id"))));
+                
+                allResults.add(item);
+                resultSources.put(itemId, collection + "/" + itemId + ".json");
+            }
+        }
+        
+        // Sort results by id for consistency
+        allResults.sort((a, b) -> {
+            String idA = String.valueOf(a.get("id"));
+            String idB = String.valueOf(b.get("id"));
+            return idA.compareTo(idB);
+        });
+        
+        // Pagination
+        int totalResults = allResults.size();
+        int totalPages = (int) Math.ceil((double) totalResults / pageSize);
+        int startIndex = (page - 1) * pageSize;
+        int endIndex = Math.min(startIndex + pageSize, totalResults);
+        
+        List<Map<String, Object>> paginatedResults = 
+            startIndex < totalResults ? allResults.subList(startIndex, endIndex) : new ArrayList<>();
+        
+        // Add source info to results
+        List<Map<String, Object>> resultsWithSource = paginatedResults.stream()
+            .map(item -> {
+                Map<String, Object> result = new HashMap<>(item);
+                String itemId = String.valueOf(item.get("id"));
+                result.put("_source", resultSources.getOrDefault(itemId, "unknown"));
+                return result;
+            })
+            .collect(Collectors.toList());
+        
+        long executionTime = System.currentTimeMillis() - startTime;
+        
+        Map<String, Object> metadata = Map.of(
+            "collection", collection,
+            "totalResults", totalResults,
+            "page", page,
+            "pageSize", pageSize,
+            "totalPages", totalPages,
+            "executionTimeMs", executionTime,
+            "searchTime", LocalDateTime.now(),
+            "searchCriteria", searchCriteria
+        );
+        
+        log.info("Search completed for collection '{}': {} results in {}ms", 
+                collection, totalResults, executionTime);
+        
+        return Map.of(
+            "results", resultsWithSource,
+            "metadata", metadata
+        );
+    }
+    
+    private boolean matches(Map<String, Object> item, Map<String, Object> searchCriteria) {
+        if (searchCriteria == null || searchCriteria.isEmpty()) {
+            return true;
+        }
+        
+        for (Map.Entry<String, Object> criterion : searchCriteria.entrySet()) {
+            String fieldPath = criterion.getKey();
+            Object searchValue = criterion.getValue();
+            
+            if (!matchesField(item, fieldPath, searchValue)) {
+                return false; // ALL criteria must match (AND logic)
+            }
+        }
+        
+        return true;
+    }
+    
+    private boolean matchesField(Map<String, Object> item, String fieldPath, Object searchValue) {
+        // Handle array notation like "settings.accessList[].userId"
+        if (fieldPath.contains("[]")) {
+            return matchesArrayField(item, fieldPath, searchValue);
+        }
+        
+        // Handle regular nested fields like "metadata.createdBy.userId"
+        Object fieldValue = getNestedValue(item, fieldPath);
+        return valuesMatch(fieldValue, searchValue);
+    }
+    
+    private boolean matchesArrayField(Map<String, Object> item, String fieldPath, Object searchValue) {
+        // Split "settings.accessList[].userId" into "settings.accessList" and "userId"
+        String[] parts = fieldPath.split("\\[\\]\\.", 2);
+        if (parts.length != 2) return false;
+        
+        String arrayPath = parts[0];
+        String itemField = parts[1];
+        
+        Object arrayValue = getNestedValue(item, arrayPath);
+        if (!(arrayValue instanceof List)) return false;
+        
+        List<?> array = (List<?>) arrayValue;
+        for (Object arrayItem : array) {
+            if (arrayItem instanceof Map) {
+                Object itemValue = getNestedValue((Map<String, Object>) arrayItem, itemField);
+                if (valuesMatch(itemValue, searchValue)) {
+                    return true;
+                }
+            }
+        }
+        
+        return false;
+    }
+    
+    private Object getNestedValue(Map<String, Object> item, String fieldPath) {
+        if (fieldPath == null || item == null) return null;
+        
+        String[] parts = fieldPath.split("\\.");
+        Object current = item;
+        
+        for (String part : parts) {
+            if (current == null) return null;
+            
+            if (current instanceof Map) {
+                current = ((Map<?, ?>) current).get(part);
+            } else {
+                return null;
+            }
+        }
+        
+        return current;
+    }
+    
+    private boolean valuesMatch(Object fieldValue, Object searchValue) {
+        if (fieldValue == null && searchValue == null) return true;
+        if (fieldValue == null || searchValue == null) return false;
+        
+        // Convert both to strings for comparison to handle type differences
+        String fieldStr = String.valueOf(fieldValue);
+        String searchStr = String.valueOf(searchValue);
+        
+        // Try exact match first
+        if (fieldStr.equals(searchStr)) return true;
+        
+        // Try case-insensitive match for strings
+        if (fieldStr.equalsIgnoreCase(searchStr)) return true;
+        
+        // Try numeric comparison if both can be parsed as numbers
+        try {
+            double fieldNum = Double.parseDouble(fieldStr);
+            double searchNum = Double.parseDouble(searchStr);
+            return Math.abs(fieldNum - searchNum) < 0.0001; // Handle floating point precision
+        } catch (NumberFormatException e) {
+            // Not numbers, continue with string comparison
+        }
+        
+        return false;
+    }
+}
+
+// Simplified Search Controller
+// src/main/java/com/mockapi/controller/SimpleSearchController.java
+package com.mockapi.controller;
+
+import com.mockapi.model.ApiResponse;
+import com.mockapi.service.SimpleSearchService;
+import lombok.RequiredArgsConstructor;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
+
+import java.util.Map;
+
+@RestController
+@RequestMapping("/api/search")
+@RequiredArgsConstructor
+public class SimpleSearchController {
+    
+    private final SimpleSearchService searchService;
+    
+    // Main search endpoint
+    @PostMapping("/{collection}")
+    public ResponseEntity<ApiResponse> search(@PathVariable String collection,
+                                            @RequestBody Map<String, Object> searchCriteria,
+                                            @RequestParam(defaultValue = "1") int page,
+                                            @RequestParam(defaultValue = "10") int pageSize) {
+        
+        Map<String, Object> result = searchService.search(collection, searchCriteria, page, pageSize);
+        
+        return ResponseEntity.ok(ApiResponse.success(result, 
+            "Found " + ((Map<?, ?>) result.get("metadata")).get("totalResults") + " results"));
+    }
+    
+    // Quick single field search
+    @GetMapping("/{collection}")
+    public ResponseEntity<ApiResponse> quickSearch(@PathVariable String collection,
+                                                 @RequestParam String field,
+                                                 @RequestParam String value,
+                                                 @RequestParam(defaultValue = "1") int page,
+                                                 @RequestParam(defaultValue = "10") int pageSize) {
+        
+        Map<String, Object> searchCriteria = Map.of(field, value);
+        Map<String, Object> result = searchService.search(collection, searchCriteria, page, pageSize);
+        
+        return ResponseEntity.ok(ApiResponse.success(result, 
+            "Found " + ((Map<?, ?>) result.get("metadata")).get("totalResults") + " results"));
+    }
+    
+    // Get search examples and documentation
+    @GetMapping("/examples")
+    public ResponseEntity<ApiResponse> getSearchExamples() {
+        Map<String, Object> examples = Map.of(
+            "basic_search", Map.of(
+                "description", "Find by name and status",
+                "method", "POST",
+                "url", "/api/search/projects",
+                "body", Map.of(
+                    "name", "Sample Project",
+                    "status", "active"
+                )
+            ),
+            
+            "nested_field", Map.of(
+                "description", "Search in nested objects",
+                "method", "POST", 
+                "url", "/api/search/projects",
+                "body", Map.of(
+                    "metadata.createdBy.userId", 42,
+                    "metadata.createdBy.username", "john_doe"
+                )
+            ),
+            
+            "deep_nested", Map.of(
+                "description", "Search deeply nested fields",
+                "method", "POST",
+                "url", "/api/search/projects", 
+                "body", Map.of(
+                    "metadata.createdBy.profile.firstName", "John",
+                    "metadata.createdBy.profile.preferences.theme", "dark"
+                )
+            ),
+            
+            "array_search", Map.of(
+                "description", "Search inside arrays using [] notation",
+                "method", "POST",
+                "url", "/api/search/projects",
+                "body", Map.of(
+                    "settings.accessList[].userId", "55",
+                    "settings.accessList[].permissions", "read"
+                )
+            ),
+            
+            "mixed_search", Map.of(
+                "description", "Combine different field types",
+                "method", "POST",
+                "url", "/api/search/projects",
+                "body", Map.of(
+                    "name", "Sample Project",
+                    "status", "active", 
+                    "metadata.createdBy.userId", 42,
+                    "settings.accessList[].userId", 55
+                )
+            ),
+            
+            "quick_search", Map.of(
+                "description", "Quick single field search via GET",
+                "method", "GET",
+                "url", "/api/search/projects?field=status&value=active"
+            )
+        );
+        
+        Map<String, Object> tips = Map.of(
+            "nested_fields", "Use dots to access nested objects: 'metadata.createdBy.userId'",
+            "array_search", "Use [] notation for arrays: 'settings.accessList[].userId'",
+            "type_flexible", "Values are compared as both strings and numbers automatically",
+            "case_insensitive", "String comparisons are case-insensitive by default",
+            "source_tracking", "Results include '_source' field showing which file it came from",
+            "and_logic", "All search criteria must match (AND logic)",
+            "pagination", "Use page and pageSize parameters for large result sets"
+        );
+        
+        Map<String, Object> response = Map.of(
+            "examples", examples,
+            "tips", tips,
+            "supported_patterns", Map.of(
+                "simple_field", "\"fieldName\": \"value\"",
+                "nested_object", "\"parent.child.field\": \"value\"", 
+                "array_element", "\"arrayField[].property\": \"value\"",
+                "mixed_types", "Values can be strings, numbers, or booleans"
+            )
+        );
+        
+        return ResponseEntity.ok(ApiResponse.success(response, "Search documentation and examples"));
+    }
+}        
+
 // Application Properties
 // src/main/resources/application.yml
 server:

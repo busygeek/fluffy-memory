@@ -1,296 +1,559 @@
-# 🔍 Mock REST API - Search Documentation
+// Updated DynamicEndpointController with array bracket syntax
+// src/main/java/com/mockapi/controller/DynamicEndpointController.java
 
-A simple and powerful search API for your JSON data with support for nested objects and arrays.
+package com.mockapi.controller;
 
-## 🚀 Quick Start
+import com.fasterxml.jackson.core.type.TypeReference;
+import com.fasterxml.jackson.databind.ObjectMapper;
+import com.mockapi.exception.MockApiException;
+import com.mockapi.model.ApiResponse;
+import com.mockapi.model.RouteConfig;
+import com.mockapi.service.DynamicRouteService;
+import com.mockapi.service.FileStorageService;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.ResponseEntity;
+import org.springframework.web.bind.annotation.*;
 
-### Basic Search
-Search your card data with simple field matching:
+import jakarta.servlet.http.HttpServletRequest;
+import java.util.*;
 
-```bash
-POST /api/search/cards
-Content-Type: application/json
-
-{
-  "card.cardType": "Mastercard World Elite",
-  "card.cardHolderName": "Alice Smith"
-}
-```
-
-### Quick Single Field Search
-```bash
-GET /api/search/cards?field=card.cardType&value=Mastercard
-```
-
-## 📋 Sample Data Structure
-
-Our examples use this card data structure:
-
-```json
-{
-  "card": {
-    "cardNumber": "4111-1111-1111-1111",
-    "cardType": "Mastercard World Elite",
-    "expiryDate": "12/27",
-    "cardHolderName": "Alice Smith"
-  },
-  "cardBenefits": [
-    {
-      "benefitName": "Airport Lounge Access",
-      "description": "Complimentary access to over 1,000 airport lounges worldwide.",
-      "status": "Active",
-      "usageLimitPerYear": 8
-    },
-    {
-      "benefitName": "Travel Insurance",
-      "description": "Automatic travel insurance when full fare is paid with the card.",
-      "coverageAmount": 1000000,
-      "status": "Active"
+@RestController
+@RequestMapping("/api/dynamic")
+@RequiredArgsConstructor
+@Slf4j
+public class DynamicEndpointController {
+    
+    private final DynamicRouteService dynamicRouteService;
+    private final FileStorageService fileStorage;
+    private final ObjectMapper objectMapper;
+    
+    @RequestMapping(value = "/**", method = {RequestMethod.GET, RequestMethod.POST, 
+                   RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.PATCH})
+    public ResponseEntity<ApiResponse> handleDynamicRequest(
+            HttpServletRequest request,
+            @RequestBody(required = false) Map<String, Object> requestBody) {
+        
+        String httpMethod = request.getMethod();
+        String requestPath = "/api/dynamic" + request.getServletPath().substring("/api/dynamic".length());
+        
+        log.debug("Processing dynamic request: {} {}", httpMethod, requestPath);
+        
+        // Find matching route configuration
+        RouteConfig route = dynamicRouteService.findMatchingRoute(httpMethod, requestPath);
+        if (route == null) {
+            throw new MockApiException(404, "No dynamic route found for " + httpMethod + " " + requestPath);
+        }
+        
+        log.debug("Found matching route: {}", route.getRouteId());
+        
+        // Extract path variables and query parameters
+        Map<String, String> pathVars = dynamicRouteService.extractPathVariables(route, requestPath);
+        Map<String, String> queryParams = extractQueryParameters(request);
+        
+        // Process the request based on HTTP method
+        Object result = switch (httpMethod.toUpperCase()) {
+            case "GET" -> handleGetRequest(route, pathVars, queryParams);
+            case "POST" -> handlePostRequest(route, pathVars, queryParams, requestBody);
+            case "PUT" -> handlePutRequest(route, pathVars, queryParams, requestBody);
+            case "DELETE" -> handleDeleteRequest(route, pathVars, queryParams);
+            case "PATCH" -> handlePatchRequest(route, pathVars, queryParams, requestBody);
+            default -> throw new MockApiException(405, "Method not allowed: " + httpMethod);
+        };
+        
+        String message = String.format("Dynamic %s request processed successfully", httpMethod);
+        Map<String, Object> metadata = Map.of(
+            "route", route.getRouteId(),
+            "collection", route.getCollection(),
+            "pathVariables", pathVars,
+            "queryParameters", queryParams
+        );
+        
+        return ResponseEntity.ok(ApiResponse.custom(200, message, result, metadata));
     }
-  ],
-  "merchantInstructions": {
-    "allowedTransactionTypes": ["purchase", "refund", "pre-authorization"],
-    "restrictedMerchantCategories": [
-      "adult entertainment",
-      "unregulated cryptocurrency exchanges"
-    ],
-    "currencyAcceptance": ["USD", "EUR", "CAD"],
-    "authorizationRules": {
-      "captureTimeLimitHours": 24,
-      "partialAuthorizations": false
+    
+    // FIXED GET REQUEST HANDLER - Now supports both filtering approaches
+    private Object handleGetRequest(RouteConfig route, Map<String, String> pathVars, 
+                                   Map<String, String> queryParams) {
+        String collection = route.getCollection();
+        
+        // If there's an 'id' path variable, try to get specific item
+        if (pathVars.containsKey("id")) {
+            String id = pathVars.get("id");
+            Object item = getItemFromCollection(collection, id, route.getStorageStrategy());
+            if (item == null) {
+                throw new MockApiException(404, "Item with id " + id + " not found in " + collection);
+            }
+            return item;
+        }
+        
+        // Get all items from collection
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        List<Map<String, Object>> filteredItems;
+        Map<String, Object> filterInfo;
+        
+        // Choose filtering approach based on whether paramMappings exist
+        if (route.getParamMappings() != null && !route.getParamMappings().isEmpty()) {
+            log.debug("Using mapped parameter filtering for route: {}", route.getRouteId());
+            
+            // Apply parameter mappings and use mapped filtering
+            Map<String, Object> mappedFilters = new HashMap<>();
+            applyParameterMappings(route, pathVars, queryParams, mappedFilters);
+            
+            filteredItems = applyMappedFilters(items, mappedFilters);
+            
+            filterInfo = Map.of(
+                "filterType", "mapped",
+                "originalParams", queryParams,
+                "mappedFilters", mappedFilters,
+                "paramMappings", route.getParamMappings()
+            );
+        } else {
+            log.debug("Using direct parameter filtering for route: {}", route.getRouteId());
+            
+            // Use direct filtering (current approach)
+            filteredItems = applyDirectFilters(items, queryParams);
+            
+            filterInfo = Map.of(
+                "filterType", "direct",
+                "appliedFilters", queryParams
+            );
+        }
+        
+        return Map.of(
+            "collection", collection,
+            "items", filteredItems,
+            "count", filteredItems.size(),
+            "totalCount", items.size(),
+            "filterInfo", filterInfo
+        );
     }
-  },
-  "benefitServiceInstructions": {
-    "contactMethods": {
-      "phone": "+1-800-555-1234",
-      "email": "benefits-support@examplecard.com"
-    },
-    "claimProcess": {
-      "steps": [
-        "Log into the benefits portal or call customer service.",
-        "Submit supporting documents (e.g., receipts, travel itinerary)."
-      ],
-      "documentationRequired": [
-        "Proof of purchase with card",
-        "Valid identification"
-      ]
-    },
-    "serviceHours": {
-      "weekdays": "08:00 - 20:00 EST",
-      "weekends": "10:00 - 16:00 EST"
+    
+    // ENHANCED DIRECT FILTERING: Now supports array bracket syntax and nested fields
+    private List<Map<String, Object>> applyDirectFilters(List<Map<String, Object>> items, 
+                                                         Map<String, String> queryParams) {
+        if (queryParams.isEmpty()) {
+            log.debug("No query parameters provided, returning all items");
+            return items;
+        }
+        
+        log.debug("Applying direct filters: {}", queryParams);
+        
+        return items.stream()
+                .filter(item -> {
+                    boolean matches = queryParams.entrySet().stream()
+                            .allMatch(entry -> {
+                                String paramName = entry.getKey();      // Direct query param name (can include array syntax)
+                                String paramValue = entry.getValue();   // Query param value
+                                
+                                Object itemValue;
+                                
+                                // Check if the parameter name contains array brackets or dots (nested access)
+                                if (paramName.contains("[]") || paramName.contains(".")) {
+                                    // Use nested field access for complex field paths
+                                    itemValue = getNestedFieldValue(item, paramName);
+                                    log.debug("Direct nested/array filter: field='{}', resolved value='{}'", paramName, itemValue);
+                                } else {
+                                    // Simple field access for flat fields
+                                    itemValue = item.get(paramName);
+                                    log.debug("Direct simple filter: field='{}', value='{}'", paramName, itemValue);
+                                }
+                                
+                                if (itemValue == null) {
+                                    log.debug("Field '{}' not found in item {}", paramName, item.get("id"));
+                                    return false;
+                                }
+                                
+                                boolean containsMatch = matchFieldValue(itemValue, paramValue);
+                                
+                                log.debug("Direct filter check: field='{}', itemValue='{}', paramValue='{}', match={}",
+                                        paramName, itemValue, paramValue, containsMatch);
+                                
+                                return containsMatch;
+                            });
+                    
+                    log.debug("Item {} matches all direct filters: {}", item.get("id"), matches);
+                    return matches;
+                })
+                .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
     }
-  }
-}
-```
-
-## 🎯 Search Examples
-
-### 1. Basic Field Search
-Find cards by card holder name:
-```json
-{
-  "card.cardHolderName": "Alice Smith"
-}
-```
-
-### 2. Nested Object Search
-Search in deeply nested objects:
-```json
-{
-  "merchantInstructions.authorizationRules.captureTimeLimitHours": 24,
-  "benefitServiceInstructions.serviceHours.weekdays": "08:00 - 20:00 EST"
-}
-```
-
-### 3. Array Search - Find Specific Benefits
-Search inside the cardBenefits array:
-```json
-{
-  "cardBenefits[].benefitName": "Airport Lounge Access",
-  "cardBenefits[].status": "Active"
-}
-```
-
-### 4. Array Search - Find by Coverage Amount
-```json
-{
-  "cardBenefits[].coverageAmount": 1000000
-}
-```
-
-### 5. Array Search - Multiple Criteria
-Find cards with active travel insurance:
-```json
-{
-  "cardBenefits[].benefitName": "Travel Insurance",
-  "cardBenefits[].status": "Active"
-}
-```
-
-### 6. Search in Arrays of Simple Values
-Find cards that accept specific currencies:
-```json
-{
-  "merchantInstructions.allowedTransactionTypes": "purchase",
-  "merchantInstructions.currencyAcceptance": "USD"
-}
-```
-
-### 7. Search in Nested Arrays
-Find specific documentation requirements:
-```json
-{
-  "benefitServiceInstructions.claimProcess.documentationRequired": "Valid identification"
-}
-```
-
-### 8. Complex Multi-Level Search
-Combine different search criteria:
-```json
-{
-  "card.cardType": "Mastercard World Elite",
-  "cardBenefits[].status": "Active",
-  "merchantInstructions.authorizationRules.partialAuthorizations": false,
-  "benefitServiceInstructions.contactMethods.phone": "+1-800-555-1234"
-}
-```
-
-## 📚 Search Patterns Guide
-
-### Basic Patterns
-| Pattern | Example | Description |
-|---------|---------|-------------|
-| `"field"` | `"card.cardType"` | Simple nested field |
-| `"field[]"` | `"cardBenefits[]"` | Entire array |
-| `"field[].subfield"` | `"cardBenefits[].status"` | Field in array objects |
-
-### Real Examples with Card Data
-
-#### ✅ Card Information
-```json
-{
-  "card.cardNumber": "4111-1111-1111-1111",
-  "card.expiryDate": "12/27"
-}
-```
-
-#### ✅ Benefits Search
-```json
-{
-  "cardBenefits[].benefitName": "Concierge Service",
-  "cardBenefits[].usageLimitPerYear": 8
-}
-```
-
-#### ✅ Merchant Rules
-```json
-{
-  "merchantInstructions.allowedTransactionTypes": "refund",
-  "merchantInstructions.restrictedMerchantCategories": "adult entertainment"
-}
-```
-
-#### ✅ Service Instructions
-```json
-{
-  "benefitServiceInstructions.contactMethods.email": "benefits-support@examplecard.com",
-  "benefitServiceInstructions.claimProcess.steps": "Log into the benefits portal"
-}
-```
-
-## 🔧 API Endpoints
-
-### POST /api/search/{collection}
-Main search endpoint with JSON criteria
-
-**Request:**
-```json
-{
-  "field1": "value1",
-  "nested.field": "value2", 
-  "array[].field": "value3"
-}
-```
-
-**Response:**
-```json
-{
-  "status": 200,
-  "message": "Found 2 results",
-  "data": {
-    "results": [
-      {
-        "card": { ... },
-        "_source": "cards/alice-card.json"
-      }
-    ],
-    "metadata": {
-      "totalResults": 2,
-      "page": 1,
-      "pageSize": 10,
-      "executionTimeMs": 15
+    
+    // NEW APPROACH: Mapped filtering with improved array bracket syntax
+    private List<Map<String, Object>> applyMappedFilters(List<Map<String, Object>> items, 
+                                                         Map<String, Object> mappedFilters) {
+        if (mappedFilters.isEmpty()) {
+            log.debug("No mapped filters provided, returning all items");
+            return items;
+        }
+        
+        log.debug("Applying mapped filters: {}", mappedFilters);
+        
+        return items.stream()
+                .filter(item -> {
+                    boolean matches = mappedFilters.entrySet().stream()
+                            .allMatch(entry -> {
+                                String mappedFieldName = entry.getKey();        // Mapped field name
+                                String filterValue = String.valueOf(entry.getValue()); // Filter value
+                                
+                                // Handle nested field access with array bracket syntax
+                                Object itemValue = getNestedFieldValue(item, mappedFieldName);
+                                
+                                if (itemValue == null) {
+                                    log.debug("Mapped field '{}' not found in item {}", mappedFieldName, item.get("id"));
+                                    return false;
+                                }
+                                
+                                boolean containsMatch = matchFieldValue(itemValue, filterValue);
+                                
+                                log.debug("Mapped filter check: field='{}', itemValue='{}', filterValue='{}', match={}",
+                                        mappedFieldName, itemValue, filterValue, containsMatch);
+                                
+                                return containsMatch;
+                            });
+                    
+                    log.debug("Item {} matches all mapped filters: {}", item.get("id"), matches);
+                    return matches;
+                })
+                .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
     }
-  }
+    
+    // Enhanced field value matching with array and nested object support
+    private boolean matchFieldValue(Object itemValue, String filterValue) {
+        if (itemValue == null) {
+            return false;
+        }
+        
+        // Handle arrays (e.g., skills: ["Java", "Python"])
+        if (itemValue instanceof List<?> list) {
+            return list.stream()
+                    .anyMatch(element -> element != null && 
+                             element.toString().toLowerCase().contains(filterValue.toLowerCase()));
+        }
+        
+        // Handle regular fields
+        return itemValue.toString().toLowerCase().contains(filterValue.toLowerCase());
+    }
+    
+    // Enhanced nested field access with array bracket syntax support
+    // Supports: "user.profile.name", "projects[].status", "projects[].tags[]"
+    private Object getNestedFieldValue(Map<String, Object> item, String fieldPath) {
+        if (fieldPath == null || fieldPath.isEmpty()) {
+            return null;
+        }
+        
+        log.debug("Getting nested field value for path: '{}'", fieldPath);
+        
+        // Split the field path while preserving array brackets
+        String[] pathParts = splitFieldPath(fieldPath);
+        Object currentValue = item;
+        
+        for (String part : pathParts) {
+            if (currentValue == null) {
+                log.debug("Current value is null at part: '{}'", part);
+                return null;
+            }
+            
+            // Check if this part has array bracket syntax
+            if (part.endsWith("[]")) {
+                // Remove the [] to get the field name
+                String fieldName = part.substring(0, part.length() - 2);
+                log.debug("Processing array field: '{}'", fieldName);
+                
+                if (currentValue instanceof Map<?, ?> map) {
+                    Object arrayField = map.get(fieldName);
+                    if (arrayField instanceof List<?> list) {
+                        // Return the list itself - matchFieldValue will handle array searching
+                        currentValue = list;
+                        log.debug("Found array field '{}' with {} elements", fieldName, list.size());
+                    } else {
+                        log.debug("Field '{}' is not an array", fieldName);
+                        return null;
+                    }
+                } else {
+                    log.debug("Current value is not a map when looking for array field '{}'", fieldName);
+                    return null;
+                }
+            } else {
+                // Regular field access
+                if (currentValue instanceof Map<?, ?> map) {
+                    currentValue = map.get(part);
+                    log.debug("Accessed field '{}', new value: {}", part, currentValue);
+                } else if (currentValue instanceof List<?> list) {
+                    // If we have a list and a regular field name, search in all list elements
+                    log.debug("Searching for field '{}' in list elements", part);
+                    List<Object> foundValues = new ArrayList<>();
+                    
+                    for (Object element : list) {
+                        if (element instanceof Map<?, ?> elementMap) {
+                            Object fieldValue = elementMap.get(part);
+                            if (fieldValue != null) {
+                                foundValues.add(fieldValue);
+                            }
+                        }
+                    }
+                    
+                    if (foundValues.isEmpty()) {
+                        log.debug("Field '{}' not found in any list elements", part);
+                        return null;
+                    } else if (foundValues.size() == 1) {
+                        currentValue = foundValues.get(0);
+                        log.debug("Found single value for field '{}': {}", part, currentValue);
+                    } else {
+                        currentValue = foundValues;
+                        log.debug("Found multiple values for field '{}': {}", part, foundValues);
+                    }
+                } else {
+                    log.debug("Cannot access field '{}' on non-map/non-list value: {}", part, currentValue);
+                    return null;
+                }
+            }
+        }
+        
+        log.debug("Final nested field value: {}", currentValue);
+        return currentValue;
+    }
+    
+    // Split field path while preserving array brackets
+    // "projects[].status" -> ["projects[]", "status"]
+    // "user.profile.name" -> ["user", "profile", "name"]
+    // "projects[].tags[]" -> ["projects[]", "tags[]"]
+    private String[] splitFieldPath(String fieldPath) {
+        List<String> parts = new ArrayList<>();
+        StringBuilder currentPart = new StringBuilder();
+        
+        for (int i = 0; i < fieldPath.length(); i++) {
+            char c = fieldPath.charAt(i);
+            
+            if (c == '.') {
+                // Add current part and start new one
+                if (currentPart.length() > 0) {
+                    parts.add(currentPart.toString());
+                    currentPart = new StringBuilder();
+                }
+            } else {
+                currentPart.append(c);
+            }
+        }
+        
+        // Add the last part
+        if (currentPart.length() > 0) {
+            parts.add(currentPart.toString());
+        }
+        
+        String[] result = parts.toArray(new String[0]);
+        log.debug("Split field path '{}' into parts: {}", fieldPath, Arrays.toString(result));
+        return result;
+    }
+    
+    // Apply parameter mappings (existing method, now used for GET as well)
+    private void applyParameterMappings(RouteConfig route, Map<String, String> pathVars, 
+                                       Map<String, String> queryParams, Map<String, Object> data) {
+        if (route.getParamMappings() != null) {
+            route.getParamMappings().forEach((paramName, dataKey) -> {
+                // Try to get value from path variables first, then query parameters
+                String value = pathVars.getOrDefault(paramName, queryParams.get(paramName));
+                if (value != null) {
+                    data.put(dataKey, value);
+                    log.debug("Applied parameter mapping: '{}' -> '{}' = '{}'", paramName, dataKey, value);
+                }
+            });
+        }
+    }
+    
+    // Rest of the existing methods remain unchanged...
+    
+    private Object handlePostRequest(RouteConfig route, Map<String, String> pathVars, 
+                                    Map<String, String> queryParams, Map<String, Object> requestBody) {
+        String collection = route.getCollection();
+        
+        if (requestBody == null) {
+            requestBody = new HashMap<>();
+        }
+        
+        // Apply path variables to request body if mapping exists
+        applyParameterMappings(route, pathVars, queryParams, requestBody);
+        
+        // Generate ID if not provided
+        if (!requestBody.containsKey("id")) {
+            requestBody.put("id", UUID.randomUUID().toString());
+        }
+        
+        requestBody.put("createdAt", new Date());
+        
+        String itemId = String.valueOf(requestBody.get("id"));
+        boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
+        
+        if (useIndividualFile) {
+            fileStorage.writeItemToCollection(collection, itemId, requestBody);
+        } else {
+            List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+                new TypeReference<List<Map<String, Object>>>() {});
+            items.add(requestBody);
+            fileStorage.writeCollectionData(collection, items);
+        }
+        
+        return requestBody;
+    }
+    
+    private Object handlePutRequest(RouteConfig route, Map<String, String> pathVars, 
+                                   Map<String, String> queryParams, Map<String, Object> requestBody) {
+        String collection = route.getCollection();
+        
+        if (!pathVars.containsKey("id")) {
+            throw new MockApiException(400, "ID path variable required for PUT requests");
+        }
+        
+        String id = pathVars.get("id");
+        
+        if (requestBody == null) {
+            requestBody = new HashMap<>();
+        }
+        
+        requestBody.put("id", id);
+        requestBody.put("updatedAt", new Date());
+        
+        applyParameterMappings(route, pathVars, queryParams, requestBody);
+        
+        boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
+        
+        if (useIndividualFile) {
+            fileStorage.writeItemToCollection(collection, id, requestBody);
+        } else {
+            updateItemInCollection(collection, id, requestBody);
+        }
+        
+        return requestBody;
+    }
+    
+    private Object handleDeleteRequest(RouteConfig route, Map<String, String> pathVars, 
+                                      Map<String, String> queryParams) {
+        String collection = route.getCollection();
+        
+        if (!pathVars.containsKey("id")) {
+            throw new MockApiException(400, "ID path variable required for DELETE requests");
+        }
+        
+        String id = pathVars.get("id");
+        boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
+        
+        boolean deleted;
+        if (useIndividualFile) {
+            deleted = fileStorage.deleteItemFromCollection(collection, id);
+        } else {
+            deleted = deleteItemFromCollection(collection, id);
+        }
+        
+        if (!deleted) {
+            throw new MockApiException(404, "Item not found: " + id);
+        }
+        
+        return Map.of("deleted", true, "id", id);
+    }
+    
+    private Object handlePatchRequest(RouteConfig route, Map<String, String> pathVars, 
+                                     Map<String, String> queryParams, Map<String, Object> requestBody) {
+        // For PATCH, we merge the request body with existing data
+        String collection = route.getCollection();
+        
+        if (!pathVars.containsKey("id")) {
+            throw new MockApiException(400, "ID path variable required for PATCH requests");
+        }
+        
+        String id = pathVars.get("id");
+        
+        // Get existing item
+        Object existing = getItemFromCollection(collection, id, route.getStorageStrategy());
+        if (existing == null) {
+            throw new MockApiException(404, "Item not found: " + id);
+        }
+        
+        @SuppressWarnings("unchecked")
+        Map<String, Object> existingMap = (Map<String, Object>) existing;
+        
+        // Merge with request body
+        if (requestBody != null) {
+            existingMap.putAll(requestBody);
+        }
+        
+        existingMap.put("updatedAt", new Date());
+        applyParameterMappings(route, pathVars, queryParams, existingMap);
+        
+        boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
+        
+        if (useIndividualFile) {
+            fileStorage.writeItemToCollection(collection, id, existingMap);
+        } else {
+            updateItemInCollection(collection, id, existingMap);
+        }
+        
+        return existingMap;
+    }
+    
+    // Helper methods remain the same...
+    
+    private Object getItemFromCollection(String collection, String id, String storageStrategy) {
+        if ("individual_file".equals(storageStrategy)) {
+            return fileStorage.readItemFromCollection(collection, id, Map.class);
+        } else {
+            List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+                new TypeReference<List<Map<String, Object>>>() {});
+            
+            return items.stream()
+                    .filter(item -> id.equals(String.valueOf(item.get("id"))))
+                    .findFirst()
+                    .orElse(null);
+        }
+    }
+    
+    private void updateItemInCollection(String collection, String id, Map<String, Object> updatedItem) {
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        for (int i = 0; i < items.size(); i++) {
+            Map<String, Object> item = items.get(i);
+            if (id.equals(String.valueOf(item.get("id")))) {
+                items.set(i, updatedItem);
+                fileStorage.writeCollectionData(collection, items);
+                return;
+            }
+        }
+        
+        throw new MockApiException(404, "Item not found: " + id);
+    }
+    
+    private boolean deleteItemFromCollection(String collection, String id) {
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        boolean removed = items.removeIf(item -> id.equals(String.valueOf(item.get("id"))));
+        
+        if (removed) {
+            fileStorage.writeCollectionData(collection, items);
+        }
+        
+        return removed;
+    }
+    
+    private Map<String, String> extractQueryParameters(HttpServletRequest request) {
+        Map<String, String> queryParams = new HashMap<>();
+        if (request.getQueryString() != null) {
+            String[] pairs = request.getQueryString().split("&");
+            for (String pair : pairs) {
+                String[] keyValue = pair.split("=");
+                if (keyValue.length == 2) {
+                    try {
+                        queryParams.put(
+                            java.net.URLDecoder.decode(keyValue[0], "UTF-8"),
+                            java.net.URLDecoder.decode(keyValue[1], "UTF-8")
+                        );
+                    } catch (Exception e) {
+                        log.warn("Failed to decode query parameter: {}", pair);
+                    }
+                }
+            }
+        }
+        return queryParams;
+    }
 }
-```
-
-### GET /api/search/{collection}
-Quick single field search
-
-```bash
-GET /api/search/cards?field=card.cardType&value=Mastercard&page=1&pageSize=5
-```
-
-### GET /api/search/examples
-Get complete documentation and examples
-
-## 💡 Pro Tips
-
-### ✅ DO's
-- **Nested Fields**: Use dots → `"card.cardHolderName"`
-- **Array Search**: Use brackets → `"cardBenefits[].status"`
-- **Mix Types**: Numbers, strings, booleans all work
-- **Case Insensitive**: "Alice" matches "alice" 
-- **Partial Matching**: "Mastercard" matches "Mastercard World Elite"
-
-### ❌ Common Mistakes
-- Don't forget `[]` for array searches
-- Don't use quotes around numbers: ✅ `123` not ❌ `"123"`
-- Don't forget dots for nested fields
-
-### 🎯 Search Logic
-- **AND Logic**: All criteria must match
-- **Flexible Matching**: Handles strings, numbers, booleans
-- **Source Tracking**: See which file each result came from
-- **Smart Arrays**: Searches through all array elements automatically
-
-## 📊 Response Features
-
-- **Pagination**: Use `page` and `pageSize` parameters
-- **Source Tracking**: Each result shows `_source` field
-- **Performance**: `executionTimeMs` in metadata
-- **Flexible**: Works with both collection files and individual files
-
-## 🚀 Getting Started
-
-1. **Simple Search**: Start with basic field matching
-2. **Nested Fields**: Use dot notation for nested objects  
-3. **Array Search**: Add `[]` notation for arrays
-4. **Combine**: Mix different criteria as needed
-
-**Example Progression:**
-```json
-// Start simple
-{"card.cardType": "Mastercard"}
-
-// Add nested field  
-{"card.cardType": "Mastercard", "card.cardHolderName": "Alice"}
-
-// Add array search
-{"card.cardType": "Mastercard", "cardBenefits[].status": "Active"}
-
-// Go complex
-{"card.cardType": "Mastercard", "cardBenefits[].status": "Active", "merchantInstructions.currencyAcceptance": "USD"}
-```
-
-Happy searching! 🎉

@@ -1,123 +1,290 @@
-# Mock REST API
+// ========================================
+// CHANGE 1: Update TemplateProcessorService to track generated values
+// ========================================
 
-A comprehensive Mock REST API built with Spring Boot 3.2 and Java 21, featuring flexible response handling, file-based storage, JWT authentication, and comprehensive Swagger documentation.
+// Add to TemplateContext class
+@Data
+@Builder
+class TemplateContext {
+    // ... existing fields ...
+    
+    // NEW: Track generated values for saving to record
+    private Map<String, String> generatedValues; // Store generated IDs/values
+    
+    // ... rest of existing fields ...
+}
 
-## 🚀 Features
+// ========================================
+// CHANGE 2: Enhanced TemplateProcessorService to store generated values
+// ========================================
 
-- **Generic CRUD Operations** - Create, Read, Update, Delete for any collection
-- **Flexible Storage** - Individual JSON files or collection-based storage
-- **Custom Response Handling** - Store and retrieve custom responses
-- **Error Simulation** - Endpoints for testing different HTTP status codes
-- **JWT Authentication** - Static token-based security
-- **Swagger Documentation** - Interactive API documentation
-- **File-Based Storage** - No database required, uses JSON files
-- **Lombok Integration** - Clean, concise code
-- **Comprehensive Logging** - Detailed operation logs
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class TemplateProcessorService {
+    
+    private final ObjectMapper objectMapper;
+    private static final Pattern TEMPLATE_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
+    
+    // ... existing methods ...
+    
+    private String resolveVariable(String variableName, TemplateContext context) {
+        String resolvedValue = switch (variableName) {
+            // Generated IDs - CHANGED to store in context
+            case "created_record_guid", "generated_guid" -> {
+                String guid = UUID.randomUUID().toString();
+                storeGeneratedValue(context, variableName, guid);
+                yield guid;
+            }
+            case "generated_6_digit_id" -> {
+                String sixDigitId = String.format("%06d", new Random().nextInt(999999));
+                storeGeneratedValue(context, variableName, sixDigitId);
+                yield sixDigitId;
+            }
+            
+            // ... rest of existing cases unchanged ...
+            
+            default -> {
+                // ... existing default logic ...
+            }
+        };
+        
+        return resolvedValue;
+    }
+    
+    // NEW METHOD: Store generated values in context
+    private void storeGeneratedValue(TemplateContext context, String variableName, String value) {
+        if (context.getGeneratedValues() == null) {
+            context.setGeneratedValues(new HashMap<>());
+        }
+        context.getGeneratedValues().put(variableName, value);
+        log.debug("Stored generated value: {} = {}", variableName, value);
+    }
+    
+    // NEW METHOD: Get generated values from context
+    public Map<String, String> getGeneratedValues(TemplateContext context) {
+        return context.getGeneratedValues() != null ? context.getGeneratedValues() : new HashMap<>();
+    }
+}
 
-## 📋 Prerequisites
+// ========================================
+// CHANGE 3: Update Enhanced Endpoint Controller to save generated IDs
+// ========================================
 
-- Java 21 or higher
-- Maven 3.6 or higher
+@RestController
+@RequestMapping("/api/dynamic")
+@RequiredArgsConstructor
+@Slf4j
+public class EnhancedDynamicEndpointController {
+    
+    // ... existing fields ...
+    
+    private Object handlePostRequest(RouteConfig route, Map<String, String> pathVars, 
+                                    Map<String, String> queryParams, Map<String, Object> requestBody) {
+        String collection = route.getRequestConfig().getCollection();
+        
+        if (requestBody == null) {
+            requestBody = new HashMap<>();
+        }
+        
+        // Apply path variables to request body if mapping exists
+        applyParameterMappings(route.getRequestConfig(), pathVars, queryParams, requestBody);
+        
+        // Generate ID if not provided
+        if (!requestBody.containsKey("id")) {
+            requestBody.put("id", UUID.randomUUID().toString());
+        }
+        
+        requestBody.put("createdAt", new Date());
+        
+        // NEW: Process templates first to generate IDs, then save them to record
+        TemplateContext context = buildTemplateContext(requestBody, queryParams, pathVars, 
+                new HttpHeaders(), requestBody);
+        
+        ResponseData responseData = dynamicRouteService.buildResponse(route, requestBody, 
+                getRequestPath(), queryParams, new HttpHeaders(), pathVars, requestBody);
+        
+        // NEW: Get generated values from template processing
+        Map<String, String> generatedValues = templateProcessor.getGeneratedValues(context);
+        
+        // NEW: Save generated values to the actual record
+        if (!generatedValues.isEmpty()) {
+            for (Map.Entry<String, String> entry : generatedValues.entrySet()) {
+                String templateVar = entry.getKey();
+                String generatedValue = entry.getValue();
+                
+                // Map template variables to record fields
+                String recordField = mapTemplateVariableToRecordField(templateVar);
+                if (recordField != null) {
+                    requestBody.put(recordField, generatedValue);
+                    log.debug("Saved generated value to record: {} = {}", recordField, generatedValue);
+                }
+            }
+        }
+        
+        String itemId = String.valueOf(requestBody.get("id"));
+        boolean useIndividualFile = "individual_file".equals(route.getRequestConfig().getStorageStrategy());
+        
+        // Save the record with generated IDs included
+        if (useIndividualFile) {
+            fileStorage.writeItemToCollection(collection, itemId, requestBody);
+        } else {
+            List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+                new TypeReference<List<Map<String, Object>>>() {});
+            items.add(requestBody);
+            fileStorage.writeCollectionData(collection, items);
+        }
+        
+        return requestBody; // Return the record with generated IDs
+    }
+    
+    // NEW METHOD: Map template variables to record field names
+    private String mapTemplateVariableToRecordField(String templateVariable) {
+        return switch (templateVariable) {
+            case "created_record_guid" -> "id"; // Save main GUID as record ID
+            case "generated_guid" -> "guid"; // Save additional GUID as 'guid' field
+            case "generated_6_digit_id" -> "contactId"; // Save 6-digit ID as 'contactId'
+            default -> null; // Don't save other template variables to record
+        };
+    }
+    
+    // ... rest of existing methods unchanged ...
+}
 
-## 🛠️ Installation & Setup
+// ========================================
+// CHANGE 4: Enhanced Route Service to support generated ID mapping
+// ========================================
 
-1. **Clone the repository**
-   ```bash
-   git clone <repository-url>
-   cd mock-rest-api
-   ```
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class EnhancedDynamicRouteService {
+    
+    // ... existing methods unchanged ...
+    
+    // UPDATED: Build response with generated values tracking
+    public ResponseData buildResponse(RouteConfig route, Object data, String requestPath, 
+                                    Map<String, String> queryParams, HttpHeaders requestHeaders,
+                                    Map<String, String> pathParams, Object requestBody) {
+        ResponseConfig respConfig = route.getResponseConfig();
+        
+        if (respConfig == null) {
+            return ResponseData.builder()
+                    .statusCode(200)
+                    .body(data)
+                    .headers(new HashMap<>())
+                    .delayMs(0)
+                    .build();
+        }
+        
+        // Build template context with generated values tracking
+        TemplateContext context = buildTemplateContext(data, queryParams, pathParams, requestHeaders, requestBody);
+        context.setGeneratedValues(new HashMap<>()); // Initialize tracking
+        
+        // ... rest of method unchanged ...
+        
+        return ResponseData.builder()
+                .statusCode(statusCode)
+                .body(responseBody)
+                .headers(processedHeaders)
+                .delayMs(respConfig.getDelayMs())
+                .build();
+    }
+    
+    // ... rest of existing methods unchanged ...
+}
 
-2. **Build the project**
-   ```bash
-   mvn clean install
-   ```
+// ========================================
+// EXAMPLE USAGE AND EXPECTED BEHAVIOR
+// ========================================
 
-3. **Run the application**
-   ```bash
-   mvn spring-boot:run
-   ```
+/*
+BEFORE CHANGE - Generated IDs only in response:
 
-4. **Access the application**
-   - API Base URL: `http://localhost:8080`
-   - Swagger UI: `http://localhost:8080/swagger-ui.html`
-   - OpenAPI Docs: `http://localhost:8080/api-docs`
-
-## 🔐 Authentication
-
-The API uses JWT token authentication with a static token for testing purposes.
-
-### Getting the JWT Token
-
-```bash
-GET /api/auth/token
-```
-
-**Response:**
-```json
+POST /api/dynamic/contacts
 {
-  "status": 200,
-  "message": "JWT token retrieved successfully",
-  "data": {
-    "token": "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJtb2NrLXVzZXIiLCJuYW1lIjoiTW9jayBBUEkgVXNlciIsImlhdCI6MTUxNjIzOTAyMiwiZXhwIjoxOTk5OTk5OTk5fQ.Lkylg3oDcCPOSeC40QLdwO3aDFTh6YQScZRLWJPSyrc",
-    "type": "Bearer",
-    "usage": "Add to Authorization header as: Bearer <token>"
+  "firstName": "John",
+  "lastName": "Doe", 
+  "email": "john@example.com"
+}
+
+Record saved in collection:
+{
+  "id": "random-uuid-1234",
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john@example.com",
+  "createdAt": "2024-08-20T14:30:25"
+}
+
+Response:
+{
+  "responseObject": {
+    "contactId": "123456",  // Generated but not in record
+    "success": true
   }
 }
-```
 
-### Using the Token
+---
 
-Add the token to your requests:
+AFTER CHANGE - Generated IDs saved to record:
 
-```bash
-Authorization: Bearer eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJzdWIiOiJtb2NrLXVzZXIiLCJuYW1lIjoiTW9jayBBUEkgVXNlciIsImlhdCI6MTUxNjIzOTAyMiwiZXhwIjoxOTk5OTk5OTk5fQ.Lkylg3oDcCPOSeC40QLdwO3aDFTh6YQScZRLWJPSyrc
-```
+POST /api/dynamic/contacts  
+{
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john@example.com"
+}
 
-### Disabling Security (for testing)
+Record saved in collection:
+{
+  "id": "generated-guid-5678",      // From {{created_record_guid}}
+  "contactId": "123456",            // From {{generated_6_digit_id}}
+  "guid": "additional-guid-9012",   // From {{generated_guid}}
+  "firstName": "John",
+  "lastName": "Doe", 
+  "email": "john@example.com",
+  "createdAt": "2024-08-20T14:30:25"
+}
 
-To disable JWT authentication, set in `application.yml`:
+Response:
+{
+  "responseObject": {
+    "contactId": "123456",  // Same value as saved in record
+    "success": true
+  }
+}
+*/
 
-```yaml
-mock-api:
-  security:
-    enabled: false
-```
+// ========================================
+// CONFIGURATION EXAMPLE WITH FIELD MAPPING
+// ========================================
 
-## 📁 Directory Structure
+// Route configuration with custom field mapping
+{
+  "routeId": "post_contact_with_saved_ids",
+  "description": "POST contact with generated IDs saved to record",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/contacts",
+    "collection": "contacts",
+    "storageStrategy": "individual_file",
+    "requiredBodyParams": ["firstName", "lastName", "email"]
+  },
+  "responseConfig": {
+    "statusCode": 201,
+    "responseBody": {
+      "responseObject": {
+        "contactId": "{{generated_6_digit_id}}",    // Will be saved as 'contactId' in record
+        "recordId": "{{created_record_guid}}",      // Will be saved as 'id' in record  
+        "additionalId": "{{generated_guid}}",       // Will be saved as 'guid' in record
+        "success": true
+      }
+    }
+  }
+}
 
-The API creates a `mock-data` directory with the following structure:
-
-```
-mock-data/
-├── users/                     # Collection directory
-│   ├── data.json             # Collection-wide data
-│   ├── user1.json           # Individual item files
-│   └── user2.json
-├── products/
-│   ├── data.json
-│   └── product1.json
-└── custom_response_key1.json  # Custom responses
-```
-
-## 🔧 API Endpoints
-
-### 📊 Collection Management
-
-#### Get All Collections
-```bash
-GET /api/data/collections
-```
-
-#### Get All Items from Collection
-```bash
-GET /api/data/{collection}
-```
-
-#### Get Item by ID
-```bash
-GET /api/data/{collection}/{id}
-```
-
-#### Create Item
-```bash
-POST /api/data/{collection}?individualFile
+// Now when you POST to create a contact, the generated values will be:
+// 1. Used in the response template
+// 2. Saved to the actual record in the collection
+// 3. Available for future GET requests on that record

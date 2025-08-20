@@ -1,22 +1,37 @@
-// Enhanced Route Configuration Model
-// src/main/java/com/mockapi/model/RouteConfig.java
+// ========================================
+// MODEL CLASSES
+// ========================================
+
+// Field Rule for request validation
 package com.mockapi.model;
 
-import com.fasterxml.jackson.annotation.JsonInclude;
 import lombok.Builder;
 import lombok.Data;
-import lombok.With;
-
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
 
 @Data
 @Builder
-@With
-@JsonInclude(JsonInclude.Include.NON_NULL)
-public class RouteConfig {
-    private String routeId;
+public class FieldRule {
+    private String fieldName;
+    private String regexPattern;
+    private int statusCode;
+    private String message;
+    private Object responseBody;
+}
+
+// Conditional Response configuration
+@Data
+@Builder
+public class ConditionalResponse {
+    private String condition; // e.g., "path:/users AND query:status=active"
+    private int statusCode;
+    private String message;
+    private Object responseBody;
+}
+
+// Request Configuration
+@Data
+@Builder
+public class RequestConfig {
     private String httpMethod; // GET, POST, PUT, DELETE
     private String urlPattern; // e.g., "/api/data/{collection}/users/{userId}/orders"
     private String collection; // which collection to use for storage
@@ -26,70 +41,587 @@ public class RouteConfig {
     private List<String> requiredPathParams; // path parameters that must be present
     private List<String> optionalQueryParams; // optional query parameters
     private Map<String, String> paramMappings; // map path/query params to storage keys
+    
+    // New fields
+    private List<String> requiredBodyParams; // required body parameters (supports nested: "user.departments[].name")
+    private List<String> optionalBodyParams; // optional body parameters (supports nested: "preferences[].settings")
+    private Map<String, String> customHeaders; // custom headers (one type)
+    private List<FieldRule> fieldRules; // field validation rules with regex (supports nested: "student.departments[].building.id")
+}
+
+// Response Configuration
+@Data
+@Builder
+public class ResponseConfig {
+    private int statusCode; // HTTP status code (e.g., 200, 201, 400, 404, 500)
+    private Object responseBody; // response body content
+    private long delayMs; // response delay in milliseconds
+    private List<ConditionalResponse> conditionalResponses; // conditional responses
+    private Map<String, String> customHeaders; // custom response headers
+    private List<String> fieldsToInclude; // specific fields to include (null = include all, supports nested: "profile.bio", "items[].name")
+    private List<String> fieldsToExclude; // specific fields to exclude (null = exclude nothing, supports nested: "preferences[].private")
+    private Map<String, Object> additionalFields; // additional fields to add to response
+    private Map<String, String> fieldAliases; // field name aliases
+}
+
+// Updated Route Configuration
+package com.mockapi.model;
+
+import com.fasterxml.jackson.annotation.JsonInclude;
+import lombok.Builder;
+import lombok.Data;
+import lombok.With;
+
+import java.time.LocalDateTime;
+
+@Data
+@Builder
+@With
+@JsonInclude(JsonInclude.Include.NON_NULL)
+public class RouteConfig {
+    private String routeId;
+    private RequestConfig requestConfig;
+    private ResponseConfig responseConfig;
     private String description;
     private LocalDateTime createdAt;
     private LocalDateTime updatedAt;
     private boolean enabled;
+}
+
+// ========================================
+// NESTED FIELD PROCESSOR SERVICE
+// ========================================
+
+// Nested Field Processor Service
+package com.mockapi.service;
+
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.util.*;
+import java.util.regex.Pattern;
+
+@Service
+@Slf4j
+public class NestedFieldProcessor {
     
-    // Enhanced response configuration
-    private ResponseConfig responseConfig;
-    
-    @Data
-    @Builder
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ResponseConfig {
-        // Success response codes for different operations
-        private Integer getSuccessCode;    // Default: 200
-        private Integer postSuccessCode;   // Default: 201
-        private Integer putSuccessCode;    // Default: 200
-        private Integer patchSuccessCode;  // Default: 200
-        private Integer deleteSuccessCode; // Default: 200
+    /**
+     * Apply field inclusion/exclusion rules with support for nested objects and arrays
+     * @param data The data object to filter
+     * @param fieldsToInclude List of field paths to include (null = include all)
+     * @param fieldsToExclude List of field paths to exclude (null = exclude nothing)
+     * @return Filtered data object
+     */
+    public Object applyFieldFiltering(Object data, List<String> fieldsToInclude, List<String> fieldsToExclude) {
+        if (data == null) {
+            return null;
+        }
         
-        // Error response codes
-        private Integer notFoundCode;      // Default: 404
-        private Integer validationErrorCode; // Default: 400
-        private Integer conflictCode;      // Default: 409
+        if (data instanceof Map) {
+            return filterMap((Map<String, Object>) data, fieldsToInclude, fieldsToExclude);
+        } else if (data instanceof List) {
+            return filterList((List<Object>) data, fieldsToInclude, fieldsToExclude);
+        }
         
-        // Conditional response rules
-        private List<ConditionalResponse> conditionalResponses;
-        
-        // Custom headers to include in responses
-        private Map<String, String> customHeaders;
-        
-        // Response delay simulation (in milliseconds)
-        private Long delayMs;
-        
-        // Whether to include metadata in response
-        private Boolean includeMetadata;
+        return data;
     }
     
-    @Data
-    @Builder
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ConditionalResponse {
-        private String condition;     // e.g., "pathVar.userId == '123'"
-        private Integer statusCode;   // Response code to use if condition matches
-        private Object responseBody;  // Custom response body
-        private String message;       // Custom message
-        private Map<String, String> headers; // Additional headers for this condition
+    /**
+     * Check if a nested field exists in the data
+     * @param data The data object
+     * @param fieldPath Field path like "user.preferences[].private" or "itemization.itemnum"
+     * @return true if field exists
+     */
+    public boolean hasNestedField(Object data, String fieldPath) {
+        return getNestedFieldValue(data, fieldPath) != null;
+    }
+    
+    /**
+     * Get value of a nested field
+     * @param data The data object
+     * @param fieldPath Field path like "user.preferences[].private"
+     * @return Field value or null if not found
+     */
+    public Object getNestedFieldValue(Object data, String fieldPath) {
+        if (data == null || fieldPath == null || fieldPath.isEmpty()) {
+            return null;
+        }
+        
+        String[] pathParts = parseFieldPath(fieldPath);
+        Object current = data;
+        
+        for (String part : pathParts) {
+            if (current == null) {
+                return null;
+            }
+            
+            if (part.endsWith("[]")) {
+                // Array field
+                String arrayField = part.substring(0, part.length() - 2);
+                current = getArrayField(current, arrayField);
+            } else {
+                // Regular field
+                current = getObjectField(current, part);
+            }
+        }
+        
+        return current;
+    }
+    
+    /**
+     * Set value of a nested field
+     * @param data The data object
+     * @param fieldPath Field path
+     * @param value Value to set
+     */
+    public void setNestedFieldValue(Object data, String fieldPath, Object value) {
+        if (data == null || fieldPath == null || fieldPath.isEmpty()) {
+            return;
+        }
+        
+        String[] pathParts = parseFieldPath(fieldPath);
+        Object current = data;
+        
+        // Navigate to parent of target field
+        for (int i = 0; i < pathParts.length - 1; i++) {
+            String part = pathParts[i];
+            
+            if (part.endsWith("[]")) {
+                String arrayField = part.substring(0, part.length() - 2);
+                current = getArrayField(current, arrayField);
+            } else {
+                current = getObjectField(current, part);
+            }
+            
+            if (current == null) {
+                return; // Cannot navigate further
+            }
+        }
+        
+        // Set the final field
+        String finalField = pathParts[pathParts.length - 1];
+        if (current instanceof Map && !finalField.endsWith("[]")) {
+            ((Map<String, Object>) current).put(finalField, value);
+        }
+    }
+    
+    private Map<String, Object> filterMap(Map<String, Object> data, List<String> fieldsToInclude, List<String> fieldsToExclude) {
+        Map<String, Object> result = new HashMap<>();
+        
+        // Apply inclusion filter first
+        if (fieldsToInclude != null && !fieldsToInclude.isEmpty()) {
+            for (String fieldPath : fieldsToInclude) {
+                includeField(data, result, fieldPath);
+            }
+        } else {
+            // Include all fields by default
+            result.putAll(data);
+            // Recursively filter nested objects
+            result.replaceAll((key, value) -> applyFieldFiltering(value, null, fieldsToExclude));
+        }
+        
+        // Apply exclusion filter
+        if (fieldsToExclude != null && !fieldsToExclude.isEmpty()) {
+            for (String fieldPath : fieldsToExclude) {
+                excludeField(result, fieldPath);
+            }
+        }
+        
+        return result;
+    }
+    
+    private List<Object> filterList(List<Object> data, List<String> fieldsToInclude, List<String> fieldsToExclude) {
+        List<Object> result = new ArrayList<>();
+        
+        for (Object item : data) {
+            result.add(applyFieldFiltering(item, fieldsToInclude, fieldsToExclude));
+        }
+        
+        return result;
+    }
+    
+    private void includeField(Map<String, Object> source, Map<String, Object> target, String fieldPath) {
+        String[] pathParts = parseFieldPath(fieldPath);
+        
+        if (pathParts.length == 1) {
+            // Simple field
+            String field = pathParts[0];
+            if (field.endsWith("[]")) {
+                // Array field
+                String arrayField = field.substring(0, field.length() - 2);
+                if (source.containsKey(arrayField)) {
+                    target.put(arrayField, source.get(arrayField));
+                }
+            } else {
+                // Regular field
+                if (source.containsKey(field)) {
+                    target.put(field, source.get(field));
+                }
+            }
+        } else {
+            // Nested field - need to build the structure
+            String topLevel = pathParts[0];
+            if (source.containsKey(topLevel)) {
+                if (!target.containsKey(topLevel)) {
+                    target.put(topLevel, createNestedStructure(source.get(topLevel)));
+                }
+                
+                String remainingPath = String.join(".", Arrays.copyOfRange(pathParts, 1, pathParts.length));
+                if (target.get(topLevel) instanceof Map) {
+                    includeField((Map<String, Object>) source.get(topLevel), 
+                               (Map<String, Object>) target.get(topLevel), remainingPath);
+                }
+            }
+        }
+    }
+    
+    private void excludeField(Map<String, Object> data, String fieldPath) {
+        String[] pathParts = parseFieldPath(fieldPath);
+        
+        if (pathParts.length == 1) {
+            // Simple field
+            String field = pathParts[0];
+            if (field.endsWith("[]")) {
+                // Remove entire array
+                String arrayField = field.substring(0, field.length() - 2);
+                data.remove(arrayField);
+            } else {
+                // Remove regular field
+                data.remove(field);
+            }
+        } else {
+            // Nested field
+            String topLevel = pathParts[0];
+            Object topLevelValue = data.get(topLevel);
+            
+            if (topLevelValue != null) {
+                String remainingPath = String.join(".", Arrays.copyOfRange(pathParts, 1, pathParts.length));
+                
+                if (topLevel.endsWith("[]") && topLevelValue instanceof List) {
+                    // Array of objects
+                    String arrayField = topLevel.substring(0, topLevel.length() - 2);
+                    List<Object> arrayData = (List<Object>) data.get(arrayField);
+                    for (Object item : arrayData) {
+                        if (item instanceof Map) {
+                            excludeField((Map<String, Object>) item, remainingPath);
+                        }
+                    }
+                } else if (topLevelValue instanceof Map) {
+                    // Nested object
+                    excludeField((Map<String, Object>) topLevelValue, remainingPath);
+                }
+            }
+        }
+    }
+    
+    private Object createNestedStructure(Object original) {
+        if (original instanceof Map) {
+            return new HashMap<>((Map<String, Object>) original);
+        } else if (original instanceof List) {
+            List<Object> newList = new ArrayList<>();
+            for (Object item : (List<Object>) original) {
+                newList.add(createNestedStructure(item));
+            }
+            return newList;
+        }
+        return original;
+    }
+    
+    private String[] parseFieldPath(String fieldPath) {
+        // Split by dots, but handle array notation
+        return fieldPath.split("\\.");
+    }
+    
+    private Object getObjectField(Object obj, String fieldName) {
+        if (obj instanceof Map) {
+            return ((Map<String, Object>) obj).get(fieldName);
+        }
+        return null;
+    }
+    
+    private Object getArrayField(Object obj, String fieldName) {
+        if (obj instanceof Map) {
+            Object field = ((Map<String, Object>) obj).get(fieldName);
+            if (field instanceof List) {
+                return field;
+            }
+        }
+        return null;
+    }
+    
+    /**
+     * Validate nested field using regex pattern
+     * @param data The data object
+     * @param fieldPath Field path like "student.departments[].building.id"
+     * @param regexPattern Regex pattern to validate against
+     * @return true if validation passes
+     */
+    public boolean validateNestedField(Object data, String fieldPath, String regexPattern) {
+        Object fieldValue = getNestedFieldValue(data, fieldPath);
+        
+        if (fieldValue == null) {
+            return true; // Null values pass validation (use required validation separately)
+        }
+        
+        if (fieldValue instanceof List) {
+            // Validate all items in array
+            List<Object> arrayValues = (List<Object>) fieldValue;
+            for (Object item : arrayValues) {
+                if (!validateSingleValue(item, regexPattern)) {
+                    return false;
+                }
+            }
+            return true;
+        } else {
+            // Validate single value
+            return validateSingleValue(fieldValue, regexPattern);
+        }
+    }
+    
+    private boolean validateSingleValue(Object value, String regexPattern) {
+        if (value == null) {
+            return true;
+        }
+        
+        String stringValue = String.valueOf(value);
+        return Pattern.matches(regexPattern, stringValue);
+    }
+    
+    /**
+     * Check if all required nested fields are present
+     * @param data The data object
+     * @param requiredFields List of required field paths
+     * @return List of missing field paths (empty if all present)
+     */
+    public List<String> findMissingRequiredFields(Object data, List<String> requiredFields) {
+        List<String> missing = new ArrayList<>();
+        
+        if (requiredFields != null) {
+            for (String fieldPath : requiredFields) {
+                if (!hasNestedField(data, fieldPath)) {
+                    missing.add(fieldPath);
+                }
+            }
+        }
+        
+        return missing;
     }
 }
 
+// ========================================
+// TEMPLATE PROCESSOR SERVICE
+// ========================================
 
+// Template Processor Service
+package com.mockapi.service;
 
+import com.fasterxml.jackson.databind.ObjectMapper;
+import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
+import org.springframework.stereotype.Service;
+
+import java.time.LocalDateTime;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
+
+@Service
+@RequiredArgsConstructor
+@Slf4j
+public class TemplateProcessorService {
+    
+    private final ObjectMapper objectMapper;
+    private static final Pattern TEMPLATE_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
+    
+    public Object processTemplate(Object template, TemplateContext context) {
+        if (template == null) {
+            return null;
+        }
+        
+        if (template instanceof String) {
+            return processStringTemplate((String) template, context);
+        } else if (template instanceof Map) {
+            return processMapTemplate((Map<String, Object>) template, context);
+        } else if (template instanceof List) {
+            return processListTemplate((List<Object>) template, context);
+        }
+        
+        return template;
+    }
+    
+    private String processStringTemplate(String template, TemplateContext context) {
+        if (template == null || !template.contains("{{")) {
+            return template;
+        }
+        
+        Matcher matcher = TEMPLATE_PATTERN.matcher(template);
+        StringBuffer result = new StringBuffer();
+        
+        while (matcher.find()) {
+            String variableName = matcher.group(1).trim();
+            String replacement = resolveVariable(variableName, context);
+            matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(result);
+        
+        return result.toString();
+    }
+    
+    private Map<String, Object> processMapTemplate(Map<String, Object> template, TemplateContext context) {
+        Map<String, Object> result = new HashMap<>();
+        
+        for (Map.Entry<String, Object> entry : template.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            
+            // Process key if it contains templates
+            String processedKey = processStringTemplate(key, context);
+            
+            // Process value recursively
+            Object processedValue = processTemplate(value, context);
+            
+            result.put(processedKey, processedValue);
+        }
+        
+        return result;
+    }
+    
+    private List<Object> processListTemplate(List<Object> template, TemplateContext context) {
+        List<Object> result = new ArrayList<>();
+        
+        for (Object item : template) {
+            result.add(processTemplate(item, context));
+        }
+        
+        return result;
+    }
+    
+    private String resolveVariable(String variableName, TemplateContext context) {
+        return switch (variableName) {
+            // Generated IDs
+            case "created_record_guid", "generated_guid" -> UUID.randomUUID().toString();
+            case "generated_6_digit_id" -> String.format("%06d", new Random().nextInt(999999));
+            
+            // Timestamps
+            case "current_timestamp" -> LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
+            case "current_date" -> LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
+            case "timestamp" -> String.valueOf(System.currentTimeMillis());
+            
+            // Data variables
+            case "created_object_with_extras" -> serializeToString(context.getCreatedObject());
+            case "filtered_results" -> serializeToString(context.getFilteredResults());
+            case "paginated_results" -> serializeToString(context.getPaginatedResults());
+            case "paginated_filtered_results" -> serializeToString(context.getPaginatedFilteredResults());
+            case "search_results" -> serializeToString(context.getSearchResults());
+            case "found_user" -> serializeToString(context.getFoundObject());
+            case "updated_profile" -> serializeToString(context.getUpdatedObject());
+            
+            // Count variables
+            case "total_count" -> String.valueOf(context.getTotalCount());
+            case "returned_count" -> String.valueOf(context.getReturnedCount());
+            
+            // Boolean variables
+            case "has_more_results" -> String.valueOf(context.isHasMoreResults());
+            case "has_next_page" -> String.valueOf(context.isHasNextPage());
+            case "has_previous_page" -> String.valueOf(context.isHasPreviousPage());
+            
+            // Request variables
+            case "request_body" -> serializeToString(context.getRequestBody());
+            
+            // Query parameter variables (dynamic)
+            default -> {
+                if (variableName.startsWith("query.")) {
+                    String paramName = variableName.substring(6);
+                    yield context.getQueryParams().getOrDefault(paramName, "");
+                } else if (variableName.startsWith("path.")) {
+                    String paramName = variableName.substring(5);
+                    yield context.getPathParams().getOrDefault(paramName, "");
+                } else if (variableName.startsWith("header.")) {
+                    String headerName = variableName.substring(7);
+                    yield context.getHeaders().getOrDefault(headerName, "");
+                } else {
+                    log.warn("Unknown template variable: {}", variableName);
+                    yield "{{" + variableName + "}}"; // Return as-is if unknown
+                }
+            }
+        };
+    }
+    
+    private String serializeToString(Object obj) {
+        if (obj == null) {
+            return "null";
+        }
+        
+        if (obj instanceof String) {
+            return (String) obj;
+        }
+        
+        try {
+            return objectMapper.writeValueAsString(obj);
+        } catch (Exception e) {
+            log.error("Failed to serialize object to string", e);
+            return obj.toString();
+        }
+    }
+}
+
+// Template Context for passing data to template processor
+@Data
+@Builder
+class TemplateContext {
+    // Created/Updated objects
+    private Object createdObject;
+    private Object updatedObject;
+    private Object foundObject;
+    
+    // Search/Filter results
+    private List<Object> filteredResults;
+    private List<Object> paginatedResults;
+    private List<Object> paginatedFilteredResults;
+    private List<Object> searchResults;
+    
+    // Counts
+    private int totalCount;
+    private int returnedCount;
+    
+    // Pagination flags
+    private boolean hasMoreResults;
+    private boolean hasNextPage;
+    private boolean hasPreviousPage;
+    
+    // Request data
+    private Object requestBody;
+    private Map<String, String> queryParams;
+    private Map<String, String> pathParams;
+    private Map<String, String> headers;
+    
+    // Pagination info
+    private int offset;
+    private int limit;
+    
+    // Additional context
+    private String processingTimeMs;
+    private Map<String, Object> customVariables;
+}
+
+// ========================================
+// ENHANCED DYNAMIC ROUTE SERVICE
+// ========================================
 
 // Enhanced Dynamic Route Service
-// src/main/java/com/mockapi/service/DynamicRouteService.java
 package com.mockapi.service;
 
 import com.fasterxml.jackson.core.type.TypeReference;
 import com.mockapi.exception.MockApiException;
-import com.mockapi.model.RouteConfig;
+import com.mockapi.model.*;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.HttpHeaders;
 import org.springframework.stereotype.Service;
 import org.springframework.util.AntPathMatcher;
 
+import jakarta.servlet.http.HttpServletRequest;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
@@ -97,9 +629,11 @@ import java.util.stream.Collectors;
 @Service
 @RequiredArgsConstructor
 @Slf4j
-public class DynamicRouteService {
+public class EnhancedDynamicRouteService {
     
     private final FileStorageService fileStorage;
+    private final TemplateProcessorService templateProcessor;
+    private final NestedFieldProcessor nestedFieldProcessor;
     private final AntPathMatcher pathMatcher = new AntPathMatcher();
     
     private static final String ROUTES_COLLECTION = "_dynamic_routes";
@@ -111,7 +645,6 @@ public class DynamicRouteService {
             routeConfig.setRouteId(generateRouteId(routeConfig));
         }
         
-        // Check for conflicts
         if (routeExists(routeConfig.getRouteId())) {
             throw new MockApiException(409, "Route with ID " + routeConfig.getRouteId() + " already exists");
         }
@@ -119,19 +652,12 @@ public class DynamicRouteService {
         routeConfig.setCreatedAt(LocalDateTime.now());
         routeConfig.setEnabled(true);
         
-        // Set default response configuration if not provided
-        if (routeConfig.getResponseConfig() == null) {
-            routeConfig.setResponseConfig(createDefaultResponseConfig());
-        } else {
-            // Fill in missing default values
-            fillDefaultResponseCodes(routeConfig.getResponseConfig());
-        }
-        
-        // Store the route configuration
         fileStorage.writeItemToCollection(ROUTES_COLLECTION, routeConfig.getRouteId(), routeConfig);
         
-        log.info("Registered dynamic route: {} {} -> {} with response config", 
-            routeConfig.getHttpMethod(), routeConfig.getUrlPattern(), routeConfig.getCollection());
+        log.info("Registered enhanced dynamic route: {} {} -> {}", 
+            routeConfig.getRequestConfig().getHttpMethod(), 
+            routeConfig.getRequestConfig().getUrlPattern(), 
+            routeConfig.getRequestConfig().getCollection());
         
         return routeConfig;
     }
@@ -147,13 +673,6 @@ public class DynamicRouteService {
         updatedConfig.setUpdatedAt(LocalDateTime.now());
         
         validateRouteConfig(updatedConfig);
-        
-        // Preserve existing response config if not provided
-        if (updatedConfig.getResponseConfig() == null && existing.getResponseConfig() != null) {
-            updatedConfig.setResponseConfig(existing.getResponseConfig());
-        } else if (updatedConfig.getResponseConfig() != null) {
-            fillDefaultResponseCodes(updatedConfig.getResponseConfig());
-        }
         
         fileStorage.writeItemToCollection(ROUTES_COLLECTION, routeId, updatedConfig);
         
@@ -191,8 +710,9 @@ public class DynamicRouteService {
         List<RouteConfig> activeRoutes = getActiveRoutes();
         
         for (RouteConfig route : activeRoutes) {
-            if (route.getHttpMethod().equalsIgnoreCase(httpMethod) && 
-                pathMatcher.match(route.getUrlPattern(), requestPath)) {
+            RequestConfig reqConfig = route.getRequestConfig();
+            if (reqConfig.getHttpMethod().equalsIgnoreCase(httpMethod) && 
+                pathMatcher.match(reqConfig.getUrlPattern(), requestPath)) {
                 return route;
             }
         }
@@ -201,259 +721,344 @@ public class DynamicRouteService {
     }
     
     public Map<String, String> extractPathVariables(RouteConfig route, String requestPath) {
-        return pathMatcher.extractUriTemplateVariables(route.getUrlPattern(), requestPath);
+        return pathMatcher.extractUriTemplateVariables(route.getRequestConfig().getUrlPattern(), requestPath);
     }
     
-    /**
-     * Determines the appropriate HTTP status code for a successful operation
-     */
-    public int getSuccessStatusCode(RouteConfig route, String httpMethod) {
-        if (route.getResponseConfig() == null) {
-            return getDefaultSuccessCode(httpMethod);
+    public ValidationResult validateRequest(RouteConfig route, Map<String, Object> requestBody, 
+                                          HttpHeaders headers, Map<String, String> queryParams) {
+        RequestConfig reqConfig = route.getRequestConfig();
+        
+        // Validate required body parameters (including nested fields)
+        if (reqConfig.getRequiredBodyParams() != null && requestBody != null) {
+            List<String> missingFields = nestedFieldProcessor.findMissingRequiredFields(requestBody, reqConfig.getRequiredBodyParams());
+            if (!missingFields.isEmpty()) {
+                return ValidationResult.failure(400, "Missing required parameters: " + String.join(", ", missingFields));
+            }
         }
         
-        RouteConfig.ResponseConfig config = route.getResponseConfig();
-        return switch (httpMethod.toUpperCase()) {
-            case "GET" -> config.getGetSuccessCode() != null ? config.getGetSuccessCode() : 200;
-            case "POST" -> config.getPostSuccessCode() != null ? config.getPostSuccessCode() : 201;
-            case "PUT" -> config.getPutSuccessCode() != null ? config.getPutSuccessCode() : 200;
-            case "PATCH" -> config.getPatchSuccessCode() != null ? config.getPatchSuccessCode() : 200;
-            case "DELETE" -> config.getDeleteSuccessCode() != null ? config.getDeleteSuccessCode() : 200;
-            default -> 200;
-        };
-    }
-    
-    /**
-     * Gets the configured error status code for specific error types
-     */
-    public int getErrorStatusCode(RouteConfig route, String errorType) {
-        if (route.getResponseConfig() == null) {
-            return getDefaultErrorCode(errorType);
+        // Validate custom headers
+        if (reqConfig.getCustomHeaders() != null) {
+            for (String headerName : reqConfig.getCustomHeaders().keySet()) {
+                if (!headers.containsKey(headerName)) {
+                    return ValidationResult.failure(400, "Missing required header: " + headerName);
+                }
+            }
         }
         
-        RouteConfig.ResponseConfig config = route.getResponseConfig();
-        return switch (errorType.toLowerCase()) {
-            case "not_found" -> config.getNotFoundCode() != null ? config.getNotFoundCode() : 404;
-            case "validation_error" -> config.getValidationErrorCode() != null ? config.getValidationErrorCode() : 400;
-            case "conflict" -> config.getConflictCode() != null ? config.getConflictCode() : 409;
-            default -> 500;
-        };
+        // Validate field rules (including nested fields and arrays)
+        if (reqConfig.getFieldRules() != null && requestBody != null) {
+            for (FieldRule rule : reqConfig.getFieldRules()) {
+                if (!nestedFieldProcessor.validateNestedField(requestBody, rule.getFieldName(), rule.getRegexPattern())) {
+                    return ValidationResult.failure(rule.getStatusCode(), rule.getMessage(), rule.getResponseBody());
+                }
+            }
+        }
+        
+        return ValidationResult.success();
     }
     
-    /**
-     * Evaluates conditional responses and returns the matching one if any
-     */
-    public RouteConfig.ConditionalResponse evaluateConditionalResponse(RouteConfig route, 
-            Map<String, String> pathVars, Map<String, String> queryParams, Map<String, Object> requestBody) {
+    public ResponseData buildResponse(RouteConfig route, Object data, String requestPath, 
+                                    Map<String, String> queryParams, HttpHeaders requestHeaders,
+                                    Map<String, String> pathParams, Object requestBody) {
+        ResponseConfig respConfig = route.getResponseConfig();
         
-        if (route.getResponseConfig() == null || 
-            route.getResponseConfig().getConditionalResponses() == null) {
+        if (respConfig == null) {
+            return ResponseData.builder()
+                    .statusCode(200)
+                    .body(data)
+                    .headers(new HashMap<>())
+                    .delayMs(0)
+                    .build();
+        }
+        
+        // Build template context
+        TemplateContext context = buildTemplateContext(data, queryParams, pathParams, requestHeaders, requestBody);
+        
+        // Check conditional responses first
+        ResponseData conditionalResponse = checkConditionalResponses(respConfig, requestPath, queryParams, requestHeaders, context);
+        if (conditionalResponse != null) {
+            return conditionalResponse;
+        }
+        
+        // Use configured status code and response body
+        int statusCode = respConfig.getStatusCode() > 0 ? respConfig.getStatusCode() : 200;
+        Object responseBody = respConfig.getResponseBody() != null ? respConfig.getResponseBody() : data;
+        
+        // Process templates in response body
+        responseBody = templateProcessor.processTemplate(responseBody, context);
+        
+        // Apply response transformations if responseBody is the actual data
+        if (respConfig.getResponseBody() == null && data instanceof Map) {
+            responseBody = transformResponseData((Map<String, Object>) data, respConfig);
+        }
+        
+        // Add additional fields
+        if (respConfig.getAdditionalFields() != null && responseBody instanceof Map) {
+            Map<String, Object> bodyMap = (Map<String, Object>) responseBody;
+            Map<String, Object> processedAdditionalFields = (Map<String, Object>) templateProcessor.processTemplate(respConfig.getAdditionalFields(), context);
+            bodyMap.putAll(processedAdditionalFields);
+        }
+        
+        // Process templates in custom headers
+        Map<String, String> processedHeaders = new HashMap<>();
+        if (respConfig.getCustomHeaders() != null) {
+            respConfig.getCustomHeaders().forEach((key, value) -> {
+                String processedValue = (String) templateProcessor.processTemplate(value, context);
+                processedHeaders.put(key, processedValue);
+            });
+        }
+        
+        return ResponseData.builder()
+                .statusCode(statusCode)
+                .body(responseBody)
+                .headers(processedHeaders)
+                .delayMs(respConfig.getDelayMs())
+                .build();
+    }
+    
+    private TemplateContext buildTemplateContext(Object data, Map<String, String> queryParams, 
+                                               Map<String, String> pathParams, HttpHeaders requestHeaders,
+                                               Object requestBody) {
+        // Convert headers to Map<String, String>
+        Map<String, String> headerMap = new HashMap<>();
+        requestHeaders.forEach((key, values) -> {
+            if (!values.isEmpty()) {
+                headerMap.put(key, values.get(0));
+            }
+        });
+        
+        // Build context based on data type and operation
+        TemplateContext.TemplateContextBuilder contextBuilder = TemplateContext.builder()
+                .requestBody(requestBody)
+                .queryParams(queryParams != null ? queryParams : new HashMap<>())
+                .pathParams(pathParams != null ? pathParams : new HashMap<>())
+                .headers(headerMap);
+        
+        // Handle different data scenarios
+        if (data instanceof List) {
+            List<Object> dataList = (List<Object>) data;
+            contextBuilder
+                    .filteredResults(dataList)
+                    .searchResults(dataList)
+                    .totalCount(dataList.size())
+                    .returnedCount(dataList.size());
+                    
+            // Apply pagination if offset/limit are provided
+            int offset = getIntParam(queryParams, "offset", 0);
+            int limit = getIntParam(queryParams, "limit", dataList.size());
+            
+            if (offset > 0 || limit < dataList.size()) {
+                List<Object> paginatedList = applyPagination(dataList, offset, limit);
+                contextBuilder
+                        .paginatedResults(paginatedList)
+                        .paginatedFilteredResults(paginatedList)
+                        .returnedCount(paginatedList.size())
+                        .hasMoreResults(offset + limit < dataList.size())
+                        .hasNextPage(offset + limit < dataList.size())
+                        .hasPreviousPage(offset > 0);
+            }
+        } else if (data instanceof Map) {
+            contextBuilder
+                    .createdObject(data)
+                    .updatedObject(data)
+                    .foundObject(data);
+        }
+        
+        return contextBuilder.build();
+    }
+    
+    private List<Object> applyPagination(List<Object> data, int offset, int limit) {
+        int start = Math.min(offset, data.size());
+        int end = Math.min(start + limit, data.size());
+        return data.subList(start, end);
+    }
+    
+    private int getIntParam(Map<String, String> params, String key, int defaultValue) {
+        if (params == null || !params.containsKey(key)) {
+            return defaultValue;
+        }
+        try {
+            return Integer.parseInt(params.get(key));
+        } catch (NumberFormatException e) {
+            return defaultValue;
+        }
+    }
+    
+    private ResponseData checkConditionalResponses(ResponseConfig respConfig, String requestPath, 
+                                                 Map<String, String> queryParams, HttpHeaders requestHeaders,
+                                                 TemplateContext context) {
+        if (respConfig.getConditionalResponses() == null) {
             return null;
         }
         
-        for (RouteConfig.ConditionalResponse conditional : route.getResponseConfig().getConditionalResponses()) {
-            if (evaluateCondition(conditional.getCondition(), pathVars, queryParams, requestBody)) {
-                return conditional;
+        for (ConditionalResponse condResp : respConfig.getConditionalResponses()) {
+            if (evaluateCondition(condResp.getCondition(), requestPath, queryParams, requestHeaders)) {
+                // Process templates in conditional response
+                Object processedResponseBody = templateProcessor.processTemplate(condResp.getResponseBody(), context);
+                
+                return ResponseData.builder()
+                        .statusCode(condResp.getStatusCode())
+                        .body(processedResponseBody)
+                        .headers(respConfig.getCustomHeaders() != null ? respConfig.getCustomHeaders() : new HashMap<>())
+                        .delayMs(respConfig.getDelayMs())
+                        .build();
             }
         }
         
         return null;
     }
     
+    private boolean evaluateCondition(String condition, String requestPath, 
+                                    Map<String, String> queryParams, HttpHeaders requestHeaders) {
+        // Simple condition parser for path, query, and header checks
+        // Format: "path:/users AND query:status=active AND header:X-User-Type=admin"
+        
+        String[] parts = condition.split(" AND ");
+        
+        for (String part : parts) {
+            part = part.trim();
+            
+            if (part.startsWith("path:")) {
+                String pathPattern = part.substring(5);
+                if (!requestPath.contains(pathPattern)) {
+                    return false;
+                }
+            } else if (part.startsWith("query:")) {
+                String queryCheck = part.substring(6);
+                String[] keyValue = queryCheck.split("=");
+                if (keyValue.length == 2) {
+                    String expectedValue = queryParams.get(keyValue[0]);
+                    if (!keyValue[1].equals(expectedValue)) {
+                        return false;
+                    }
+                }
+            } else if (part.startsWith("header:")) {
+                String headerCheck = part.substring(7);
+                String[] keyValue = headerCheck.split("=");
+                if (keyValue.length == 2) {
+                    String headerValue = requestHeaders.getFirst(keyValue[0]);
+                    if (!keyValue[1].equals(headerValue)) {
+                        return false;
+                    }
+                }
+            }
+        }
+        
+        return true;
+    }
+    
+    private Map<String, Object> transformResponseData(Map<String, Object> data, ResponseConfig respConfig) {
+        // Use nested field processor for advanced field filtering
+        Object filteredData = nestedFieldProcessor.applyFieldFiltering(data, 
+                respConfig.getFieldsToInclude(), respConfig.getFieldsToExclude());
+        
+        Map<String, Object> result = (Map<String, Object>) filteredData;
+        
+        // Apply field aliases
+        if (respConfig.getFieldAliases() != null) {
+            Map<String, Object> aliasedResult = new HashMap<>();
+            result.forEach((key, value) -> {
+                String aliasKey = respConfig.getFieldAliases().getOrDefault(key, key);
+                aliasedResult.put(aliasKey, value);
+            });
+            result = aliasedResult;
+        }
+        
+        return result;
+    }
+    
+    // Helper methods
     private boolean routeExists(String routeId) {
         return getRoute(routeId) != null;
     }
     
     private String generateRouteId(RouteConfig config) {
-        String base = config.getHttpMethod().toLowerCase() + "_" + 
-                     config.getUrlPattern().replaceAll("[^a-zA-Z0-9]", "_");
+        RequestConfig reqConfig = config.getRequestConfig();
+        String base = reqConfig.getHttpMethod().toLowerCase() + "_" + 
+                     reqConfig.getUrlPattern().replaceAll("[^a-zA-Z0-9]", "_");
         return base + "_" + System.currentTimeMillis();
     }
     
     private void validateRouteConfig(RouteConfig config) {
-        if (config.getHttpMethod() == null || config.getHttpMethod().isEmpty()) {
+        if (config.getRequestConfig() == null) {
+            throw new MockApiException(400, "Request configuration is required");
+        }
+        
+        RequestConfig reqConfig = config.getRequestConfig();
+        
+        if (reqConfig.getHttpMethod() == null || reqConfig.getHttpMethod().isEmpty()) {
             throw new MockApiException(400, "HTTP method is required");
         }
         
-        if (!Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH").contains(config.getHttpMethod().toUpperCase())) {
-            throw new MockApiException(400, "Invalid HTTP method: " + config.getHttpMethod());
+        if (!Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH").contains(reqConfig.getHttpMethod().toUpperCase())) {
+            throw new MockApiException(400, "Invalid HTTP method: " + reqConfig.getHttpMethod());
         }
         
-        if (config.getUrlPattern() == null || config.getUrlPattern().isEmpty()) {
+        if (reqConfig.getUrlPattern() == null || reqConfig.getUrlPattern().isEmpty()) {
             throw new MockApiException(400, "URL pattern is required");
         }
         
-        if (config.getCollection() == null || config.getCollection().isEmpty()) {
+        if (reqConfig.getCollection() == null || reqConfig.getCollection().isEmpty()) {
             throw new MockApiException(400, "Collection is required");
         }
         
         // Validate URL pattern format
-        if (!config.getUrlPattern().startsWith("/")) {
-            config.setUrlPattern("/" + config.getUrlPattern());
+        if (!reqConfig.getUrlPattern().startsWith("/")) {
+            reqConfig.setUrlPattern("/" + reqConfig.getUrlPattern());
         }
         
         // Set default storage strategy
-        if (config.getStorageStrategy() == null) {
-            config.setStorageStrategy("collection_file");
+        if (reqConfig.getStorageStrategy() == null) {
+            reqConfig.setStorageStrategy("collection_file");
         }
-        
-        // Validate response configuration
-        if (config.getResponseConfig() != null) {
-            validateResponseConfig(config.getResponseConfig());
-        }
-    }
-    
-    private void validateResponseConfig(RouteConfig.ResponseConfig responseConfig) {
-        // Validate status codes are in valid HTTP range
-        validateStatusCode(responseConfig.getGetSuccessCode(), "GET success code");
-        validateStatusCode(responseConfig.getPostSuccessCode(), "POST success code");
-        validateStatusCode(responseConfig.getPutSuccessCode(), "PUT success code");
-        validateStatusCode(responseConfig.getPatchSuccessCode(), "PATCH success code");
-        validateStatusCode(responseConfig.getDeleteSuccessCode(), "DELETE success code");
-        validateStatusCode(responseConfig.getNotFoundCode(), "Not found code");
-        validateStatusCode(responseConfig.getValidationErrorCode(), "Validation error code");
-        validateStatusCode(responseConfig.getConflictCode(), "Conflict code");
-        
-        // Validate conditional responses
-        if (responseConfig.getConditionalResponses() != null) {
-            for (RouteConfig.ConditionalResponse conditional : responseConfig.getConditionalResponses()) {
-                validateStatusCode(conditional.getStatusCode(), "Conditional response status code");
-                if (conditional.getCondition() == null || conditional.getCondition().trim().isEmpty()) {
-                    throw new MockApiException(400, "Conditional response must have a condition");
-                }
-            }
-        }
-        
-        // Validate delay
-        if (responseConfig.getDelayMs() != null && responseConfig.getDelayMs() < 0) {
-            throw new MockApiException(400, "Response delay cannot be negative");
-        }
-    }
-    
-    private void validateStatusCode(Integer statusCode, String fieldName) {
-        if (statusCode != null && (statusCode < 100 || statusCode > 599)) {
-            throw new MockApiException(400, fieldName + " must be between 100 and 599");
-        }
-    }
-    
-    private RouteConfig.ResponseConfig createDefaultResponseConfig() {
-        return RouteConfig.ResponseConfig.builder()
-                .getSuccessCode(200)
-                .postSuccessCode(201)
-                .putSuccessCode(200)
-                .patchSuccessCode(200)
-                .deleteSuccessCode(200)
-                .notFoundCode(404)
-                .validationErrorCode(400)
-                .conflictCode(409)
-                .includeMetadata(true)
-                .build();
-    }
-    
-    private void fillDefaultResponseCodes(RouteConfig.ResponseConfig config) {
-        if (config.getGetSuccessCode() == null) config.setGetSuccessCode(200);
-        if (config.getPostSuccessCode() == null) config.setPostSuccessCode(201);
-        if (config.getPutSuccessCode() == null) config.setPutSuccessCode(200);
-        if (config.getPatchSuccessCode() == null) config.setPatchSuccessCode(200);
-        if (config.getDeleteSuccessCode() == null) config.setDeleteSuccessCode(200);
-        if (config.getNotFoundCode() == null) config.setNotFoundCode(404);
-        if (config.getValidationErrorCode() == null) config.setValidationErrorCode(400);
-        if (config.getConflictCode() == null) config.setConflictCode(409);
-        if (config.getIncludeMetadata() == null) config.setIncludeMetadata(true);
-    }
-    
-    private int getDefaultSuccessCode(String httpMethod) {
-        return switch (httpMethod.toUpperCase()) {
-            case "POST" -> 201;
-            default -> 200;
-        };
-    }
-    
-    private int getDefaultErrorCode(String errorType) {
-        return switch (errorType.toLowerCase()) {
-            case "not_found" -> 404;
-            case "validation_error" -> 400;
-            case "conflict" -> 409;
-            default -> 500;
-        };
-    }
-    
-    /**
-     * Simple condition evaluation - supports basic expressions like:
-     * - pathVar.userId == '123'
-     * - queryParam.status == 'active'
-     * - requestBody.type == 'premium'
-     */
-    private boolean evaluateCondition(String condition, Map<String, String> pathVars, 
-            Map<String, String> queryParams, Map<String, Object> requestBody) {
-        
-        if (condition == null || condition.trim().isEmpty()) {
-            return false;
-        }
-        
-        try {
-            // Simple string-based evaluation for basic conditions
-            condition = condition.trim();
-            
-            if (condition.contains("pathVar.")) {
-                return evaluatePathVarCondition(condition, pathVars);
-            } else if (condition.contains("queryParam.")) {
-                return evaluateQueryParamCondition(condition, queryParams);
-            } else if (condition.contains("requestBody.") && requestBody != null) {
-                return evaluateRequestBodyCondition(condition, requestBody);
-            }
-            
-            // If no specific pattern matches, return false
-            return false;
-            
-        } catch (Exception e) {
-            log.warn("Failed to evaluate condition: {}", condition, e);
-            return false;
-        }
-    }
-    
-    private boolean evaluatePathVarCondition(String condition, Map<String, String> pathVars) {
-        // Extract variable name and expected value
-        // Format: pathVar.variableName == 'expectedValue'
-        String[] parts = condition.split("==");
-        if (parts.length != 2) return false;
-        
-        String varPart = parts[0].trim().replace("pathVar.", "");
-        String expectedValue = parts[1].trim().replaceAll("'", "");
-        
-        String actualValue = pathVars.get(varPart);
-        return actualValue != null && actualValue.equals(expectedValue);
-    }
-    
-    private boolean evaluateQueryParamCondition(String condition, Map<String, String> queryParams) {
-        // Extract parameter name and expected value
-        String[] parts = condition.split("==");
-        if (parts.length != 2) return false;
-        
-        String paramPart = parts[0].trim().replace("queryParam.", "");
-        String expectedValue = parts[1].trim().replaceAll("'", "");
-        
-        String actualValue = queryParams.get(paramPart);
-        return actualValue != null && actualValue.equals(expectedValue);
-    }
-    
-    private boolean evaluateRequestBodyCondition(String condition, Map<String, Object> requestBody) {
-        // Extract field name and expected value
-        String[] parts = condition.split("==");
-        if (parts.length != 2) return false;
-        
-        String fieldPart = parts[0].trim().replace("requestBody.", "");
-        String expectedValue = parts[1].trim().replaceAll("'", "");
-        
-        Object actualValue = requestBody.get(fieldPart);
-        return actualValue != null && actualValue.toString().equals(expectedValue);
     }
 }
 
+// Helper classes
+@Data
+@Builder
+class ValidationResult {
+    private boolean valid;
+    private int statusCode;
+    private String message;
+    private Object responseBody;
+    
+    static ValidationResult success() {
+        return ValidationResult.builder().valid(true).build();
+    }
+    
+    static ValidationResult failure(int statusCode, String message) {
+        return ValidationResult.builder()
+                .valid(false)
+                .statusCode(statusCode)
+                .message(message)
+                .build();
+    }
+    
+    static ValidationResult failure(int statusCode, String message, Object responseBody) {
+        return ValidationResult.builder()
+                .valid(false)
+                .statusCode(statusCode)
+                .message(message)
+                .responseBody(responseBody)
+                .build();
+    }
+}
 
+@Data
+@Builder
+class ResponseData {
+    private int statusCode;
+    private Object body;
+    private Map<String, String> headers;
+    private long delayMs;
+}
+
+// ========================================
+// ENHANCED DYNAMIC ENDPOINT CONTROLLER
+// ========================================
 
 // Enhanced Dynamic Endpoint Handler Controller
-// src/main/java/com/mockapi/controller/DynamicEndpointController.java
 package com.mockapi.controller;
 
 import com.fasterxml.jackson.core.type.TypeReference;
@@ -461,391 +1066,261 @@ import com.fasterxml.jackson.databind.ObjectMapper;
 import com.mockapi.exception.MockApiException;
 import com.mockapi.model.ApiResponse;
 import com.mockapi.model.RouteConfig;
-import com.mockapi.service.DynamicRouteService;
+import com.mockapi.service.EnhancedDynamicRouteService;
 import com.mockapi.service.FileStorageService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.util.AntPathMatcher;
 import org.springframework.web.bind.annotation.*;
 
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 
 @RestController
 @RequestMapping("/api/dynamic")
 @RequiredArgsConstructor
 @Slf4j
-public class DynamicEndpointController {
+public class EnhancedDynamicEndpointController {
     
-    private final DynamicRouteService dynamicRouteService;
+    private final EnhancedDynamicRouteService dynamicRouteService;
     private final FileStorageService fileStorage;
     private final ObjectMapper objectMapper;
     
     @RequestMapping(value = "/**", method = {RequestMethod.GET, RequestMethod.POST, 
                    RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.PATCH})
-    public ResponseEntity<ApiResponse> handleDynamicRequest(
+    public ResponseEntity<?> handleDynamicRequest(
             HttpServletRequest request,
-            @RequestBody(required = false) Map<String, Object> requestBody) {
+            @RequestBody(required = false) Map<String, Object> requestBody,
+            @RequestHeader HttpHeaders headers) throws InterruptedException {
         
         String httpMethod = request.getMethod();
         String requestPath = "/api/dynamic" + request.getServletPath().substring("/api/dynamic".length());
         
-        log.debug("Processing dynamic request: {} {}", httpMethod, requestPath);
+        log.debug("Processing enhanced dynamic request: {} {}", httpMethod, requestPath);
         
         // Find matching route configuration
         RouteConfig route = dynamicRouteService.findMatchingRoute(httpMethod, requestPath);
         if (route == null) {
-            throw new MockApiException(404, "No dynamic route found for " + httpMethod + " " + requestPath);
+            return ResponseEntity.status(404)
+                    .body(ApiResponse.error(404, "No dynamic route found for " + httpMethod + " " + requestPath));
         }
         
         log.debug("Found matching route: {}", route.getRouteId());
         
-        // Apply response delay if configured
-        applyResponseDelay(route);
-        
         // Extract path variables and query parameters
-        Map<String, String> pathVars = dynamicRouteService.extractPathVariables(route, requestPath);
+        Map<String, String> pathVars = extractPathVariables(route, requestPath);
         Map<String, String> queryParams = extractQueryParameters(request);
         
-        // Check for conditional responses first
-        RouteConfig.ConditionalResponse conditionalResponse = dynamicRouteService
-                .evaluateConditionalResponse(route, pathVars, queryParams, requestBody);
-        
-        if (conditionalResponse != null) {
-            return handleConditionalResponse(conditionalResponse, route, pathVars, queryParams);
+        // Validate request
+        ValidationResult validation = dynamicRouteService.validateRequest(route, requestBody, headers, queryParams);
+        if (!validation.isValid()) {
+            Object responseBody = validation.getResponseBody() != null 
+                    ? validation.getResponseBody() 
+                    : ApiResponse.error(validation.getStatusCode(), validation.getMessage());
+            
+            return ResponseEntity.status(validation.getStatusCode()).body(responseBody);
         }
         
         // Process the request based on HTTP method
-        DynamicResponse dynamicResponse = switch (httpMethod.toUpperCase()) {
-            case "GET" -> handleGetRequest(route, pathVars, queryParams);
-            case "POST" -> handlePostRequest(route, pathVars, queryParams, requestBody);
-            case "PUT" -> handlePutRequest(route, pathVars, queryParams, requestBody);
-            case "DELETE" -> handleDeleteRequest(route, pathVars, queryParams);
-            case "PATCH" -> handlePatchRequest(route, pathVars, queryParams, requestBody);
-            default -> throw new MockApiException(405, "Method not allowed: " + httpMethod);
-        };
+        Object result;
+        try {
+            result = switch (httpMethod.toUpperCase()) {
+                case "GET" -> handleGetRequest(route, pathVars, queryParams);
+                case "POST" -> handlePostRequest(route, pathVars, queryParams, requestBody);
+                case "PUT" -> handlePutRequest(route, pathVars, queryParams, requestBody);
+                case "DELETE" -> handleDeleteRequest(route, pathVars, queryParams);
+                case "PATCH" -> handlePatchRequest(route, pathVars, queryParams, requestBody);
+                default -> throw new MockApiException(405, "Method not allowed: " + httpMethod);
+            };
+        } catch (MockApiException e) {
+            // For errors, use default error response or return standard error
+            return ResponseEntity.status(e.getStatusCode())
+                    .body(ApiResponse.error(e.getStatusCode(), e.getMessage()));
+        }
         
-        // Get the appropriate success status code
-        int statusCode = dynamicRouteService.getSuccessStatusCode(route, httpMethod);
+        // Build response using route configuration
+        ResponseData responseData = dynamicRouteService.buildResponse(route, result, requestPath, 
+                queryParams, headers, pathVars, requestBody);
         
-        // Build response with custom headers and metadata
-        return buildResponseEntity(route, dynamicResponse, statusCode, pathVars, queryParams, httpMethod);
+        // Apply delay if configured
+        if (responseData.getDelayMs() > 0) {
+            TimeUnit.MILLISECONDS.sleep(responseData.getDelayMs());
+        }
+        
+        // Build ResponseEntity with custom headers
+        ResponseEntity.BodyBuilder responseBuilder = ResponseEntity.status(responseData.getStatusCode());
+        
+        if (responseData.getHeaders() != null) {
+            responseData.getHeaders().forEach(responseBuilder::header);
+        }
+        
+        return responseBuilder.body(responseData.getBody());
     }
     
-    private DynamicResponse handleGetRequest(RouteConfig route, Map<String, String> pathVars, 
-                                           Map<String, String> queryParams) {
-        String collection = route.getCollection();
+    private Object handleGetRequest(RouteConfig route, Map<String, String> pathVars, 
+                                   Map<String, String> queryParams) {
+        String collection = route.getRequestConfig().getCollection();
         
-        try {
-            // If there's an 'id' path variable, try to get specific item
-            if (pathVars.containsKey("id")) {
-                String id = pathVars.get("id");
-                Object item = getItemFromCollection(collection, id, route.getStorageStrategy());
-                
-                if (item == null) {
-                    int notFoundCode = dynamicRouteService.getErrorStatusCode(route, "not_found");
-                    throw new MockApiException(notFoundCode, "Item not found: " + id);
-                }
-                
-                return new DynamicResponse(item, "Item retrieved successfully");
+        // If there's an 'id' path variable, try to get specific item
+        if (pathVars.containsKey("id")) {
+            String id = pathVars.get("id");
+            Object item = getItemFromCollection(collection, id, route.getRequestConfig().getStorageStrategy());
+            if (item == null) {
+                throw new MockApiException(404, "Item not found: " + id);
             }
-            
-            // Otherwise, get all items with optional filtering
+            return item;
+        }
+        
+        // Otherwise, get all items with optional filtering
+        List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+            new TypeReference<List<Map<String, Object>>>() {});
+        
+        // Apply basic filtering based on query parameters
+        items = applyFilters(items, queryParams);
+        
+        return Map.of(
+            "collection", collection,
+            "items", items,
+            "count", items.size(),
+            "filters", queryParams
+        );
+    }
+    
+    private Object handlePostRequest(RouteConfig route, Map<String, String> pathVars, 
+                                    Map<String, String> queryParams, Map<String, Object> requestBody) {
+        String collection = route.getRequestConfig().getCollection();
+        
+        if (requestBody == null) {
+            requestBody = new HashMap<>();
+        }
+        
+        // Apply path variables to request body if mapping exists
+        applyParameterMappings(route.getRequestConfig(), pathVars, queryParams, requestBody);
+        
+        // Generate ID if not provided
+        if (!requestBody.containsKey("id")) {
+            requestBody.put("id", UUID.randomUUID().toString());
+        }
+        
+        requestBody.put("createdAt", new Date());
+        
+        String itemId = String.valueOf(requestBody.get("id"));
+        boolean useIndividualFile = "individual_file".equals(route.getRequestConfig().getStorageStrategy());
+        
+        if (useIndividualFile) {
+            fileStorage.writeItemToCollection(collection, itemId, requestBody);
+        } else {
             List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
                 new TypeReference<List<Map<String, Object>>>() {});
-            
-            // Apply basic filtering based on query parameters
-            items = applyFilters(items, queryParams);
-            
-            Map<String, Object> result = Map.of(
-                "collection", collection,
-                "items", items,
-                "count", items.size(),
-                "filters", queryParams
-            );
-            
-            return new DynamicResponse(result, "Collection retrieved successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in GET request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
+            items.add(requestBody);
+            fileStorage.writeCollectionData(collection, items);
         }
+        
+        return requestBody;
     }
     
-    private DynamicResponse handlePostRequest(RouteConfig route, Map<String, String> pathVars, 
-                                            Map<String, String> queryParams, Map<String, Object> requestBody) {
-        String collection = route.getCollection();
+    private Object handlePutRequest(RouteConfig route, Map<String, String> pathVars, 
+                                   Map<String, String> queryParams, Map<String, Object> requestBody) {
+        String collection = route.getRequestConfig().getCollection();
         
-        try {
-            if (requestBody == null) {
-                requestBody = new HashMap<>();
-            }
-            
-            // Apply path variables to request body if mapping exists
-            applyParameterMappings(route, pathVars, queryParams, requestBody);
-            
-            // Generate ID if not provided
-            if (!requestBody.containsKey("id")) {
-                requestBody.put("id", UUID.randomUUID().toString());
-            }
-            
-            // Check for conflicts if ID was provided
-            String itemId = String.valueOf(requestBody.get("id"));
-            if (getItemFromCollection(collection, itemId, route.getStorageStrategy()) != null) {
-                int conflictCode = dynamicRouteService.getErrorStatusCode(route, "conflict");
-                throw new MockApiException(conflictCode, "Item with ID " + itemId + " already exists");
-            }
-            
-            requestBody.put("createdAt", new Date());
-            
-            boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
-            
-            if (useIndividualFile) {
-                fileStorage.writeItemToCollection(collection, itemId, requestBody);
-            } else {
-                List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
-                    new TypeReference<List<Map<String, Object>>>() {});
-                items.add(requestBody);
-                fileStorage.writeCollectionData(collection, items);
-            }
-            
-            return new DynamicResponse(requestBody, "Item created successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in POST request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
+        if (!pathVars.containsKey("id")) {
+            throw new MockApiException(400, "ID path variable required for PUT requests");
         }
+        
+        String id = pathVars.get("id");
+        
+        if (requestBody == null) {
+            requestBody = new HashMap<>();
+        }
+        
+        requestBody.put("id", id);
+        requestBody.put("updatedAt", new Date());
+        
+        applyParameterMappings(route.getRequestConfig(), pathVars, queryParams, requestBody);
+        
+        boolean useIndividualFile = "individual_file".equals(route.getRequestConfig().getStorageStrategy());
+        
+        if (useIndividualFile) {
+            fileStorage.writeItemToCollection(collection, id, requestBody);
+        } else {
+            updateItemInCollection(collection, id, requestBody);
+        }
+        
+        return requestBody;
     }
     
-    private DynamicResponse handlePutRequest(RouteConfig route, Map<String, String> pathVars, 
-                                           Map<String, String> queryParams, Map<String, Object> requestBody) {
-        String collection = route.getCollection();
+    private Object handleDeleteRequest(RouteConfig route, Map<String, String> pathVars, 
+                                      Map<String, String> queryParams) {
+        String collection = route.getRequestConfig().getCollection();
         
-        try {
-            if (!pathVars.containsKey("id")) {
-                int validationCode = dynamicRouteService.getErrorStatusCode(route, "validation_error");
-                throw new MockApiException(validationCode, "ID path variable required for PUT requests");
-            }
-            
-            String id = pathVars.get("id");
-            
-            if (requestBody == null) {
-                requestBody = new HashMap<>();
-            }
-            
-            requestBody.put("id", id);
-            requestBody.put("updatedAt", new Date());
-            
-            applyParameterMappings(route, pathVars, queryParams, requestBody);
-            
-            boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
-            
-            if (useIndividualFile) {
-                fileStorage.writeItemToCollection(collection, id, requestBody);
-            } else {
-                updateItemInCollection(collection, id, requestBody);
-            }
-            
-            return new DynamicResponse(requestBody, "Item updated successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in PUT request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
+        if (!pathVars.containsKey("id")) {
+            throw new MockApiException(400, "ID path variable required for DELETE requests");
         }
+        
+        String id = pathVars.get("id");
+        boolean useIndividualFile = "individual_file".equals(route.getRequestConfig().getStorageStrategy());
+        
+        boolean deleted;
+        if (useIndividualFile) {
+            deleted = fileStorage.deleteItemFromCollection(collection, id);
+        } else {
+            deleted = deleteItemFromCollection(collection, id);
+        }
+        
+        if (!deleted) {
+            throw new MockApiException(404, "Item not found: " + id);
+        }
+        
+        return Map.of("deleted", true, "id", id);
     }
     
-    private DynamicResponse handleDeleteRequest(RouteConfig route, Map<String, String> pathVars, 
-                                              Map<String, String> queryParams) {
-        String collection = route.getCollection();
+    private Object handlePatchRequest(RouteConfig route, Map<String, String> pathVars, 
+                                     Map<String, String> queryParams, Map<String, Object> requestBody) {
+        String collection = route.getRequestConfig().getCollection();
         
-        try {
-            if (!pathVars.containsKey("id")) {
-                int validationCode = dynamicRouteService.getErrorStatusCode(route, "validation_error");
-                throw new MockApiException(validationCode, "ID path variable required for DELETE requests");
-            }
-            
-            String id = pathVars.get("id");
-            boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
-            
-            boolean deleted;
-            if (useIndividualFile) {
-                deleted = fileStorage.deleteItemFromCollection(collection, id);
-            } else {
-                deleted = deleteItemFromCollection(collection, id);
-            }
-            
-            if (!deleted) {
-                int notFoundCode = dynamicRouteService.getErrorStatusCode(route, "not_found");
-                throw new MockApiException(notFoundCode, "Item not found: " + id);
-            }
-            
-            Map<String, Object> result = Map.of("deleted", true, "id", id);
-            return new DynamicResponse(result, "Item deleted successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in DELETE request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
+        if (!pathVars.containsKey("id")) {
+            throw new MockApiException(400, "ID path variable required for PATCH requests");
         }
+        
+        String id = pathVars.get("id");
+        
+        // Get existing item
+        Object existing = getItemFromCollection(collection, id, route.getRequestConfig().getStorageStrategy());
+        if (existing == null) {
+            throw new MockApiException(404, "Item not found: " + id);
+        }
+        
+        @SuppressWarnings("unchecked")
+        Map<String, Object> existingMap = (Map<String, Object>) existing;
+        
+        // Merge with request body
+        if (requestBody != null) {
+            existingMap.putAll(requestBody);
+        }
+        
+        existingMap.put("updatedAt", new Date());
+        applyParameterMappings(route.getRequestConfig(), pathVars, queryParams, existingMap);
+        
+        boolean useIndividualFile = "individual_file".equals(route.getRequestConfig().getStorageStrategy());
+        
+        if (useIndividualFile) {
+            fileStorage.writeItemToCollection(collection, id, existingMap);
+        } else {
+            updateItemInCollection(collection, id, existingMap);
+        }
+        
+        return existingMap;
     }
     
-    private DynamicResponse handlePatchRequest(RouteConfig route, Map<String, String> pathVars, 
-                                             Map<String, String> queryParams, Map<String, Object> requestBody) {
-        String collection = route.getCollection();
-        
-        try {
-            if (!pathVars.containsKey("id")) {
-                int validationCode = dynamicRouteService.getErrorStatusCode(route, "validation_error");
-                throw new MockApiException(validationCode, "ID path variable required for PATCH requests");
-            }
-            
-            String id = pathVars.get("id");
-            
-            // Get existing item
-            Object existing = getItemFromCollection(collection, id, route.getStorageStrategy());
-            if (existing == null) {
-                int notFoundCode = dynamicRouteService.getErrorStatusCode(route, "not_found");
-                throw new MockApiException(notFoundCode, "Item not found: " + id);
-            }
-            
-            @SuppressWarnings("unchecked")
-            Map<String, Object> existingMap = (Map<String, Object>) existing;
-            
-            // Merge with request body
-            if (requestBody != null) {
-                existingMap.putAll(requestBody);
-            }
-            
-            existingMap.put("updatedAt", new Date());
-            applyParameterMappings(route, pathVars, queryParams, existingMap);
-            
-            boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
-            
-            if (useIndividualFile) {
-                fileStorage.writeItemToCollection(collection, id, existingMap);
-            } else {
-                updateItemInCollection(collection, id, existingMap);
-            }
-            
-            return new DynamicResponse(existingMap, "Item partially updated successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in PATCH request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
-        }
+    private Map<String, String> extractPathVariables(RouteConfig route, String requestPath) {
+        AntPathMatcher pathMatcher = new AntPathMatcher();
+        return pathMatcher.extractUriTemplateVariables(route.getRequestConfig().getUrlPattern(), requestPath);
     }
     
-    private ResponseEntity<ApiResponse> handleConditionalResponse(
-            RouteConfig.ConditionalResponse conditionalResponse, RouteConfig route,
-            Map<String, String> pathVars, Map<String, String> queryParams) {
-        
-        log.debug("Applying conditional response with status code: {}", conditionalResponse.getStatusCode());
-        
-        // Create custom headers
-        HttpHeaders headers = new HttpHeaders();
-        addCustomHeaders(headers, route.getResponseConfig());
-        if (conditionalResponse.getHeaders() != null) {
-            conditionalResponse.getHeaders().forEach(headers::add);
-        }
-        
-        // Create response body
-        Object responseBody = conditionalResponse.getResponseBody();
-        if (responseBody == null) {
-            responseBody = Map.of("message", conditionalResponse.getMessage() != null ? 
-                conditionalResponse.getMessage() : "Conditional response triggered");
-        }
-        
-        // Build metadata if enabled
-        Map<String, Object> metadata = null;
-        if (route.getResponseConfig() != null && 
-            Boolean.TRUE.equals(route.getResponseConfig().getIncludeMetadata())) {
-            metadata = Map.of(
-                "route", route.getRouteId(),
-                "collection", route.getCollection(),
-                "conditionalResponse", true,
-                "pathVariables", pathVars,
-                "queryParameters", queryParams
-            );
-        }
-        
-        ApiResponse apiResponse = ApiResponse.custom(
-            conditionalResponse.getStatusCode(),
-            conditionalResponse.getMessage(),
-            responseBody,
-            metadata
-        );
-        
-        return ResponseEntity.status(conditionalResponse.getStatusCode())
-                .headers(headers)
-                .body(apiResponse);
-    }
-    
-    private ResponseEntity<ApiResponse> buildResponseEntity(RouteConfig route, DynamicResponse dynamicResponse, 
-            int statusCode, Map<String, String> pathVars, Map<String, String> queryParams, String httpMethod) {
-        
-        // Create custom headers
-        HttpHeaders headers = new HttpHeaders();
-        addCustomHeaders(headers, route.getResponseConfig());
-        
-        // Build metadata if enabled
-        Map<String, Object> metadata = null;
-        if (route.getResponseConfig() != null && 
-            Boolean.TRUE.equals(route.getResponseConfig().getIncludeMetadata())) {
-            metadata = Map.of(
-                "route", route.getRouteId(),
-                "collection", route.getCollection(),
-                "pathVariables", pathVars,
-                "queryParameters", queryParams,
-                "httpMethod", httpMethod,
-                "statusCode", statusCode
-            );
-        }
-        
-        ApiResponse apiResponse = ApiResponse.custom(
-            statusCode,
-            dynamicResponse.getMessage(),
-            dynamicResponse.getData(),
-            metadata
-        );
-        
-        return ResponseEntity.status(statusCode)
-                .headers(headers)
-                .body(apiResponse);
-    }
-    
-    private void applyResponseDelay(RouteConfig route) {
-        if (route.getResponseConfig() != null && 
-            route.getResponseConfig().getDelayMs() != null && 
-            route.getResponseConfig().getDelayMs() > 0) {
-            
-            try {
-                log.debug("Applying response delay of {}ms for route: {}", 
-                    route.getResponseConfig().getDelayMs(), route.getRouteId());
-                Thread.sleep(route.getResponseConfig().getDelayMs());
-            } catch (InterruptedException e) {
-                Thread.currentThread().interrupt();
-                log.warn("Response delay interrupted for route: {}", route.getRouteId());
-            }
-        }
-    }
-    
-    private void addCustomHeaders(HttpHeaders headers, RouteConfig.ResponseConfig responseConfig) {
-        if (responseConfig != null && responseConfig.getCustomHeaders() != null) {
-            responseConfig.getCustomHeaders().forEach(headers::add);
-        }
-    }
-    
+    // Helper methods remain the same as original...
     private Object getItemFromCollection(String collection, String id, String storageStrategy) {
         if ("individual_file".equals(storageStrategy)) {
             return fileStorage.readItemFromCollection(collection, id, Map.class);
@@ -873,9 +1348,7 @@ public class DynamicEndpointController {
             }
         }
         
-        int notFoundCode = dynamicRouteService.getErrorStatusCode(
-            dynamicRouteService.findMatchingRoute("PUT", "/dummy"), "not_found");
-        throw new MockApiException(notFoundCode, "Item not found: " + id);
+        throw new MockApiException(404, "Item not found: " + id);
     }
     
     private boolean deleteItemFromCollection(String collection, String id) {
@@ -912,10 +1385,10 @@ public class DynamicEndpointController {
         return queryParams;
     }
     
-    private void applyParameterMappings(RouteConfig route, Map<String, String> pathVars, 
+    private void applyParameterMappings(RequestConfig requestConfig, Map<String, String> pathVars, 
                                        Map<String, String> queryParams, Map<String, Object> data) {
-        if (route.getParamMappings() != null) {
-            route.getParamMappings().forEach((paramName, dataKey) -> {
+        if (requestConfig.getParamMappings() != null) {
+            requestConfig.getParamMappings().forEach((paramName, dataKey) -> {
                 String value = pathVars.getOrDefault(paramName, queryParams.get(paramName));
                 if (value != null) {
                     data.put(dataKey, value);
@@ -940,512 +1413,18 @@ public class DynamicEndpointController {
                         }))
                 .collect(ArrayList::new, ArrayList::add, ArrayList::addAll);
     }
-    
-    // Helper class to encapsulate response data and message
-    private static class DynamicResponse {
-        private final Object data;
-        private final String message;
-        
-        public DynamicResponse(Object data, String message) {
-            this.data = data;
-            this.message = message;
-        }
-        
-        public Object getData() {
-            return data;
-        }
-        
-        public String getMessage() {
-            return message;
-        }
-    }
 }
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-// Enhanced Route Configuration Model
-// src/main/java/com/mockapi/model/RouteConfig.java
-package com.mockapi.model;
-
-import com.fasterxml.jackson.annotation.JsonInclude;
-import lombok.Builder;
-import lombok.Data;
-import lombok.With;
-
-import java.time.LocalDateTime;
-import java.util.List;
-import java.util.Map;
-
-@Data
-@Builder
-@With
-@JsonInclude(JsonInclude.Include.NON_NULL)
-public class RouteConfig {
-    private String routeId;
-    private String httpMethod; // GET, POST, PUT, DELETE
-    private String urlPattern; // e.g., "/api/data/{collection}/users/{userId}/orders"
-    private String collection; // which collection to use for storage
-    private String storageStrategy; // "collection_file" or "individual_file"
-    private String responseTemplate; // optional response template
-    private Map<String, Object> defaultResponse; // default response data
-    private List<String> requiredPathParams; // path parameters that must be present
-    private List<String> optionalQueryParams; // optional query parameters
-    private Map<String, String> paramMappings; // map path/query params to storage keys
-    private String description;
-    private LocalDateTime createdAt;
-    private LocalDateTime updatedAt;
-    private boolean enabled;
-    
-    // Enhanced response configuration
-    private ResponseConfig responseConfig;
-    
-    @Data
-    @Builder
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ResponseConfig {
-        // Success response codes for different operations
-        private Integer getSuccessCode;    // Default: 200
-        private Integer postSuccessCode;   // Default: 201
-        private Integer putSuccessCode;    // Default: 200
-        private Integer patchSuccessCode;  // Default: 200
-        private Integer deleteSuccessCode; // Default: 200
-        
-        // Error response codes
-        private Integer notFoundCode;      // Default: 404
-        private Integer validationErrorCode; // Default: 400
-        private Integer conflictCode;      // Default: 409
-        
-        // Conditional response rules
-        private List<ConditionalResponse> conditionalResponses;
-        
-        // Custom headers to include in responses
-        private Map<String, String> customHeaders;
-        
-        // Response delay simulation (in milliseconds)
-        private Long delayMs;
-        
-        // Whether to include metadata in response
-        private Boolean includeMetadata;
-    }
-    
-    @Data
-    @Builder
-    @JsonInclude(JsonInclude.Include.NON_NULL)
-    public static class ConditionalResponse {
-        private String condition;     // e.g., "pathVar.userId == '123'"
-        private Integer statusCode;   // Response code to use if condition matches
-        private Object responseBody;  // Custom response body
-        private String message;       // Custom message
-        private Map<String, String> headers; // Additional headers for this condition
-    }
-}
-
-// ================================================================================
-
-// Enhanced Dynamic Route Service
-// src/main/java/com/mockapi/service/DynamicRouteService.java
-package com.mockapi.service;
-
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.mockapi.exception.MockApiException;
-import com.mockapi.model.RouteConfig;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.stereotype.Service;
-import org.springframework.util.AntPathMatcher;
-
-import java.time.LocalDateTime;
-import java.util.*;
-import java.util.stream.Collectors;
-
-@Service
-@RequiredArgsConstructor
-@Slf4j
-public class DynamicRouteService {
-    
-    private final FileStorageService fileStorage;
-    private final AntPathMatcher pathMatcher = new AntPathMatcher();
-    
-    private static final String ROUTES_COLLECTION = "_dynamic_routes";
-    
-    public RouteConfig registerRoute(RouteConfig routeConfig) {
-        validateRouteConfig(routeConfig);
-        
-        if (routeConfig.getRouteId() == null || routeConfig.getRouteId().isEmpty()) {
-            routeConfig.setRouteId(generateRouteId(routeConfig));
-        }
-        
-        // Check for conflicts
-        if (routeExists(routeConfig.getRouteId())) {
-            throw new MockApiException(409, "Route with ID " + routeConfig.getRouteId() + " already exists");
-        }
-        
-        routeConfig.setCreatedAt(LocalDateTime.now());
-        routeConfig.setEnabled(true);
-        
-        // Set default response configuration if not provided
-        if (routeConfig.getResponseConfig() == null) {
-            routeConfig.setResponseConfig(createDefaultResponseConfig());
-        } else {
-            // Fill in missing default values
-            fillDefaultResponseCodes(routeConfig.getResponseConfig());
-        }
-        
-        // Store the route configuration
-        fileStorage.writeItemToCollection(ROUTES_COLLECTION, routeConfig.getRouteId(), routeConfig);
-        
-        log.info("Registered dynamic route: {} {} -> {} with response config", 
-            routeConfig.getHttpMethod(), routeConfig.getUrlPattern(), routeConfig.getCollection());
-        
-        return routeConfig;
-    }
-    
-    public RouteConfig updateRoute(String routeId, RouteConfig updatedConfig) {
-        RouteConfig existing = getRoute(routeId);
-        if (existing == null) {
-            throw new MockApiException(404, "Route not found: " + routeId);
-        }
-        
-        updatedConfig.setRouteId(routeId);
-        updatedConfig.setCreatedAt(existing.getCreatedAt());
-        updatedConfig.setUpdatedAt(LocalDateTime.now());
-        
-        validateRouteConfig(updatedConfig);
-        
-        // Preserve existing response config if not provided
-        if (updatedConfig.getResponseConfig() == null && existing.getResponseConfig() != null) {
-            updatedConfig.setResponseConfig(existing.getResponseConfig());
-        } else if (updatedConfig.getResponseConfig() != null) {
-            fillDefaultResponseCodes(updatedConfig.getResponseConfig());
-        }
-        
-        fileStorage.writeItemToCollection(ROUTES_COLLECTION, routeId, updatedConfig);
-        
-        log.info("Updated dynamic route: {}", routeId);
-        return updatedConfig;
-    }
-    
-    public boolean deleteRoute(String routeId) {
-        boolean deleted = fileStorage.deleteItemFromCollection(ROUTES_COLLECTION, routeId);
-        if (deleted) {
-            log.info("Deleted dynamic route: {}", routeId);
-        }
-        return deleted;
-    }
-    
-    public RouteConfig getRoute(String routeId) {
-        return fileStorage.readItemFromCollection(ROUTES_COLLECTION, routeId, RouteConfig.class);
-    }
-    
-    public List<RouteConfig> getAllRoutes() {
-        List<String> routeIds = fileStorage.getItemIdsFromCollection(ROUTES_COLLECTION);
-        return routeIds.stream()
-                .map(this::getRoute)
-                .filter(Objects::nonNull)
-                .collect(Collectors.toList());
-    }
-    
-    public List<RouteConfig> getActiveRoutes() {
-        return getAllRoutes().stream()
-                .filter(RouteConfig::isEnabled)
-                .collect(Collectors.toList());
-    }
-    
-    public RouteConfig findMatchingRoute(String httpMethod, String requestPath) {
-        List<RouteConfig> activeRoutes = getActiveRoutes();
-        
-        for (RouteConfig route : activeRoutes) {
-            if (route.getHttpMethod().equalsIgnoreCase(httpMethod) && 
-                pathMatcher.match(route.getUrlPattern(), requestPath)) {
-                return route;
-            }
-        }
-        
-        return null;
-    }
-    
-    public Map<String, String> extractPathVariables(RouteConfig route, String requestPath) {
-        return pathMatcher.extractUriTemplateVariables(route.getUrlPattern(), requestPath);
-    }
-    
-    /**
-     * Determines the appropriate HTTP status code for a successful operation
-     */
-    public int getSuccessStatusCode(RouteConfig route, String httpMethod) {
-        if (route.getResponseConfig() == null) {
-            return getDefaultSuccessCode(httpMethod);
-        }
-        
-        RouteConfig.ResponseConfig config = route.getResponseConfig();
-        return switch (httpMethod.toUpperCase()) {
-            case "GET" -> config.getGetSuccessCode() != null ? config.getGetSuccessCode() : 200;
-            case "POST" -> config.getPostSuccessCode() != null ? config.getPostSuccessCode() : 201;
-            case "PUT" -> config.getPutSuccessCode() != null ? config.getPutSuccessCode() : 200;
-            case "PATCH" -> config.getPatchSuccessCode() != null ? config.getPatchSuccessCode() : 200;
-            case "DELETE" -> config.getDeleteSuccessCode() != null ? config.getDeleteSuccessCode() : 200;
-            default -> 200;
-        };
-    }
-    
-    /**
-     * Gets the configured error status code for specific error types
-     */
-    public int getErrorStatusCode(RouteConfig route, String errorType) {
-        if (route.getResponseConfig() == null) {
-            return getDefaultErrorCode(errorType);
-        }
-        
-        RouteConfig.ResponseConfig config = route.getResponseConfig();
-        return switch (errorType.toLowerCase()) {
-            case "not_found" -> config.getNotFoundCode() != null ? config.getNotFoundCode() : 404;
-            case "validation_error" -> config.getValidationErrorCode() != null ? config.getValidationErrorCode() : 400;
-            case "conflict" -> config.getConflictCode() != null ? config.getConflictCode() : 409;
-            default -> 500;
-        };
-    }
-    
-    /**
-     * Evaluates conditional responses and returns the matching one if any
-     */
-    public RouteConfig.ConditionalResponse evaluateConditionalResponse(RouteConfig route, 
-            Map<String, String> pathVars, Map<String, String> queryParams, Map<String, Object> requestBody) {
-        
-        if (route.getResponseConfig() == null || 
-            route.getResponseConfig().getConditionalResponses() == null) {
-            return null;
-        }
-        
-        for (RouteConfig.ConditionalResponse conditional : route.getResponseConfig().getConditionalResponses()) {
-            if (evaluateCondition(conditional.getCondition(), pathVars, queryParams, requestBody)) {
-                return conditional;
-            }
-        }
-        
-        return null;
-    }
-    
-    private boolean routeExists(String routeId) {
-        return getRoute(routeId) != null;
-    }
-    
-    private String generateRouteId(RouteConfig config) {
-        String base = config.getHttpMethod().toLowerCase() + "_" + 
-                     config.getUrlPattern().replaceAll("[^a-zA-Z0-9]", "_");
-        return base + "_" + System.currentTimeMillis();
-    }
-    
-    private void validateRouteConfig(RouteConfig config) {
-        if (config.getHttpMethod() == null || config.getHttpMethod().isEmpty()) {
-            throw new MockApiException(400, "HTTP method is required");
-        }
-        
-        if (!Arrays.asList("GET", "POST", "PUT", "DELETE", "PATCH").contains(config.getHttpMethod().toUpperCase())) {
-            throw new MockApiException(400, "Invalid HTTP method: " + config.getHttpMethod());
-        }
-        
-        if (config.getUrlPattern() == null || config.getUrlPattern().isEmpty()) {
-            throw new MockApiException(400, "URL pattern is required");
-        }
-        
-        if (config.getCollection() == null || config.getCollection().isEmpty()) {
-            throw new MockApiException(400, "Collection is required");
-        }
-        
-        // Validate URL pattern format
-        if (!config.getUrlPattern().startsWith("/")) {
-            config.setUrlPattern("/" + config.getUrlPattern());
-        }
-        
-        // Set default storage strategy
-        if (config.getStorageStrategy() == null) {
-            config.setStorageStrategy("collection_file");
-        }
-        
-        // Validate response configuration
-        if (config.getResponseConfig() != null) {
-            validateResponseConfig(config.getResponseConfig());
-        }
-    }
-    
-    private void validateResponseConfig(RouteConfig.ResponseConfig responseConfig) {
-        // Validate status codes are in valid HTTP range
-        validateStatusCode(responseConfig.getGetSuccessCode(), "GET success code");
-        validateStatusCode(responseConfig.getPostSuccessCode(), "POST success code");
-        validateStatusCode(responseConfig.getPutSuccessCode(), "PUT success code");
-        validateStatusCode(responseConfig.getPatchSuccessCode(), "PATCH success code");
-        validateStatusCode(responseConfig.getDeleteSuccessCode(), "DELETE success code");
-        validateStatusCode(responseConfig.getNotFoundCode(), "Not found code");
-        validateStatusCode(responseConfig.getValidationErrorCode(), "Validation error code");
-        validateStatusCode(responseConfig.getConflictCode(), "Conflict code");
-        
-        // Validate conditional responses
-        if (responseConfig.getConditionalResponses() != null) {
-            for (RouteConfig.ConditionalResponse conditional : responseConfig.getConditionalResponses()) {
-                validateStatusCode(conditional.getStatusCode(), "Conditional response status code");
-                if (conditional.getCondition() == null || conditional.getCondition().trim().isEmpty()) {
-                    throw new MockApiException(400, "Conditional response must have a condition");
-                }
-            }
-        }
-        
-        // Validate delay
-        if (responseConfig.getDelayMs() != null && responseConfig.getDelayMs() < 0) {
-            throw new MockApiException(400, "Response delay cannot be negative");
-        }
-    }
-    
-    private void validateStatusCode(Integer statusCode, String fieldName) {
-        if (statusCode != null && (statusCode < 100 || statusCode > 599)) {
-            throw new MockApiException(400, fieldName + " must be between 100 and 599");
-        }
-    }
-    
-    private RouteConfig.ResponseConfig createDefaultResponseConfig() {
-        return RouteConfig.ResponseConfig.builder()
-                .getSuccessCode(200)
-                .postSuccessCode(201)
-                .putSuccessCode(200)
-                .patchSuccessCode(200)
-                .deleteSuccessCode(200)
-                .notFoundCode(404)
-                .validationErrorCode(400)
-                .conflictCode(409)
-                .includeMetadata(true)
-                .build();
-    }
-    
-    private void fillDefaultResponseCodes(RouteConfig.ResponseConfig config) {
-        if (config.getGetSuccessCode() == null) config.setGetSuccessCode(200);
-        if (config.getPostSuccessCode() == null) config.setPostSuccessCode(201);
-        if (config.getPutSuccessCode() == null) config.setPutSuccessCode(200);
-        if (config.getPatchSuccessCode() == null) config.setPatchSuccessCode(200);
-        if (config.getDeleteSuccessCode() == null) config.setDeleteSuccessCode(200);
-        if (config.getNotFoundCode() == null) config.setNotFoundCode(404);
-        if (config.getValidationErrorCode() == null) config.setValidationErrorCode(400);
-        if (config.getConflictCode() == null) config.setConflictCode(409);
-        if (config.getIncludeMetadata() == null) config.setIncludeMetadata(true);
-    }
-    
-    private int getDefaultSuccessCode(String httpMethod) {
-        return switch (httpMethod.toUpperCase()) {
-            case "POST" -> 201;
-            default -> 200;
-        };
-    }
-    
-    private int getDefaultErrorCode(String errorType) {
-        return switch (errorType.toLowerCase()) {
-            case "not_found" -> 404;
-            case "validation_error" -> 400;
-            case "conflict" -> 409;
-            default -> 500;
-        };
-    }
-    
-    /**
-     * Simple condition evaluation - supports basic expressions like:
-     * - pathVar.userId == '123'
-     * - queryParam.status == 'active'
-     * - requestBody.type == 'premium'
-     */
-    private boolean evaluateCondition(String condition, Map<String, String> pathVars, 
-            Map<String, String> queryParams, Map<String, Object> requestBody) {
-        
-        if (condition == null || condition.trim().isEmpty()) {
-            return false;
-        }
-        
-        try {
-            // Simple string-based evaluation for basic conditions
-            condition = condition.trim();
-            
-            if (condition.contains("pathVar.")) {
-                return evaluatePathVarCondition(condition, pathVars);
-            } else if (condition.contains("queryParam.")) {
-                return evaluateQueryParamCondition(condition, queryParams);
-            } else if (condition.contains("requestBody.") && requestBody != null) {
-                return evaluateRequestBodyCondition(condition, requestBody);
-            }
-            
-            // If no specific pattern matches, return false
-            return false;
-            
-        } catch (Exception e) {
-            log.warn("Failed to evaluate condition: {}", condition, e);
-            return false;
-        }
-    }
-    
-    private boolean evaluatePathVarCondition(String condition, Map<String, String> pathVars) {
-        // Extract variable name and expected value
-        // Format: pathVar.variableName == 'expectedValue'
-        String[] parts = condition.split("==");
-        if (parts.length != 2) return false;
-        
-        String varPart = parts[0].trim().replace("pathVar.", "");
-        String expectedValue = parts[1].trim().replaceAll("'", "");
-        
-        String actualValue = pathVars.get(varPart);
-        return actualValue != null && actualValue.equals(expectedValue);
-    }
-    
-    private boolean evaluateQueryParamCondition(String condition, Map<String, String> queryParams) {
-        // Extract parameter name and expected value
-        String[] parts = condition.split("==");
-        if (parts.length != 2) return false;
-        
-        String paramPart = parts[0].trim().replace("queryParam.", "");
-        String expectedValue = parts[1].trim().replaceAll("'", "");
-        
-        String actualValue = queryParams.get(paramPart);
-        return actualValue != null && actualValue.equals(expectedValue);
-    }
-    
-    private boolean evaluateRequestBodyCondition(String condition, Map<String, Object> requestBody) {
-        // Extract field name and expected value
-        String[] parts = condition.split("==");
-        if (parts.length != 2) return false;
-        
-        String fieldPart = parts[0].trim().replace("requestBody.", "");
-        String expectedValue = parts[1].trim().replaceAll("'", "");
-        
-        Object actualValue = requestBody.get(fieldPart);
-        return actualValue != null && actualValue.toString().equals(expectedValue);
-    }
-}
-
-// ================================================================================
+// ========================================
+// DYNAMIC ROUTE CONTROLLER
+// ========================================
 
 // Dynamic Route Controller
-// src/main/java/com/mockapi/controller/DynamicRouteController.java
 package com.mockapi.controller;
 
 import com.mockapi.model.ApiResponse;
 import com.mockapi.model.RouteConfig;
-import com.mockapi.service.DynamicRouteService;
+import com.mockapi.service.EnhancedDynamicRouteService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
@@ -1458,7 +1437,7 @@ import java.util.Map;
 @RequiredArgsConstructor
 public class DynamicRouteController {
     
-    private final DynamicRouteService dynamicRouteService;
+    private final EnhancedDynamicRouteService dynamicRouteService;
     
     @PostMapping
     public ResponseEntity<ApiResponse> registerRoute(@RequestBody RouteConfig routeConfig) {
@@ -1521,222 +1500,3 @@ public class DynamicRouteController {
             "Route " + (updated.isEnabled() ? "enabled" : "disabled")));
     }
 }
-
-// ================================================================================
-
-// Enhanced Dynamic Endpoint Handler Controller
-// src/main/java/com/mockapi/controller/DynamicEndpointController.java
-package com.mockapi.controller;
-
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
-import com.mockapi.exception.MockApiException;
-import com.mockapi.model.ApiResponse;
-import com.mockapi.model.RouteConfig;
-import com.mockapi.service.DynamicRouteService;
-import com.mockapi.service.FileStorageService;
-import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
-import org.springframework.http.HttpHeaders;
-import org.springframework.http.HttpStatus;
-import org.springframework.http.ResponseEntity;
-import org.springframework.web.bind.annotation.*;
-
-import jakarta.servlet.http.HttpServletRequest;
-import java.util.*;
-
-@RestController
-@RequestMapping("/api/dynamic")
-@RequiredArgsConstructor
-@Slf4j
-public class DynamicEndpointController {
-    
-    private final DynamicRouteService dynamicRouteService;
-    private final FileStorageService fileStorage;
-    private final ObjectMapper objectMapper;
-    
-    @RequestMapping(value = "/**", method = {RequestMethod.GET, RequestMethod.POST, 
-                   RequestMethod.PUT, RequestMethod.DELETE, RequestMethod.PATCH})
-    public ResponseEntity<ApiResponse> handleDynamicRequest(
-            HttpServletRequest request,
-            @RequestBody(required = false) Map<String, Object> requestBody) {
-        
-        String httpMethod = request.getMethod();
-        String requestPath = "/api/dynamic" + request.getServletPath().substring("/api/dynamic".length());
-        
-        log.debug("Processing dynamic request: {} {}", httpMethod, requestPath);
-        
-        // Find matching route configuration
-        RouteConfig route = dynamicRouteService.findMatchingRoute(httpMethod, requestPath);
-        if (route == null) {
-            throw new MockApiException(404, "No dynamic route found for " + httpMethod + " " + requestPath);
-        }
-        
-        log.debug("Found matching route: {}", route.getRouteId());
-        
-        // Apply response delay if configured
-        applyResponseDelay(route);
-        
-        // Extract path variables and query parameters
-        Map<String, String> pathVars = dynamicRouteService.extractPathVariables(route, requestPath);
-        Map<String, String> queryParams = extractQueryParameters(request);
-        
-        // Check for conditional responses first
-        RouteConfig.ConditionalResponse conditionalResponse = dynamicRouteService
-                .evaluateConditionalResponse(route, pathVars, queryParams, requestBody);
-        
-        if (conditionalResponse != null) {
-            return handleConditionalResponse(conditionalResponse, route, pathVars, queryParams);
-        }
-        
-        // Process the request based on HTTP method
-        DynamicResponse dynamicResponse = switch (httpMethod.toUpperCase()) {
-            case "GET" -> handleGetRequest(route, pathVars, queryParams);
-            case "POST" -> handlePostRequest(route, pathVars, queryParams, requestBody);
-            case "PUT" -> handlePutRequest(route, pathVars, queryParams, requestBody);
-            case "DELETE" -> handleDeleteRequest(route, pathVars, queryParams);
-            case "PATCH" -> handlePatchRequest(route, pathVars, queryParams, requestBody);
-            default -> throw new MockApiException(405, "Method not allowed: " + httpMethod);
-        };
-        
-        // Get the appropriate success status code
-        int statusCode = dynamicRouteService.getSuccessStatusCode(route, httpMethod);
-        
-        // Build response with custom headers and metadata
-        return buildResponseEntity(route, dynamicResponse, statusCode, pathVars, queryParams, httpMethod);
-    }
-    
-    private DynamicResponse handleGetRequest(RouteConfig route, Map<String, String> pathVars, 
-                                           Map<String, String> queryParams) {
-        String collection = route.getCollection();
-        
-        try {
-            // If there's an 'id' path variable, try to get specific item
-            if (pathVars.containsKey("id")) {
-                String id = pathVars.get("id");
-                Object item = getItemFromCollection(collection, id, route.getStorageStrategy());
-                
-                if (item == null) {
-                    int notFoundCode = dynamicRouteService.getErrorStatusCode(route, "not_found");
-                    throw new MockApiException(notFoundCode, "Item not found: " + id);
-                }
-                
-                return new DynamicResponse(item, "Item retrieved successfully");
-            }
-            
-            // Otherwise, get all items with optional filtering
-            List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
-                new TypeReference<List<Map<String, Object>>>() {});
-            
-            // Apply basic filtering based on query parameters
-            items = applyFilters(items, queryParams);
-            
-            Map<String, Object> result = Map.of(
-                "collection", collection,
-                "items", items,
-                "count", items.size(),
-                "filters", queryParams
-            );
-            
-            return new DynamicResponse(result, "Collection retrieved successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in GET request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
-        }
-    }
-    
-    private DynamicResponse handlePostRequest(RouteConfig route, Map<String, String> pathVars, 
-                                            Map<String, String> queryParams, Map<String, Object> requestBody) {
-        String collection = route.getCollection();
-        
-        try {
-            if (requestBody == null) {
-                requestBody = new HashMap<>();
-            }
-            
-            // Apply path variables to request body if mapping exists
-            applyParameterMappings(route, pathVars, queryParams, requestBody);
-            
-            // Generate ID if not provided
-            if (!requestBody.containsKey("id")) {
-                requestBody.put("id", UUID.randomUUID().toString());
-            }
-            
-            // Check for conflicts if ID was provided
-            String itemId = String.valueOf(requestBody.get("id"));
-            if (getItemFromCollection(collection, itemId, route.getStorageStrategy()) != null) {
-                int conflictCode = dynamicRouteService.getErrorStatusCode(route, "conflict");
-                throw new MockApiException(conflictCode, "Item with ID " + itemId + " already exists");
-            }
-            
-            requestBody.put("createdAt", new Date());
-            
-            boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
-            
-            if (useIndividualFile) {
-                fileStorage.writeItemToCollection(collection, itemId, requestBody);
-            } else {
-                List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
-                    new TypeReference<List<Map<String, Object>>>() {});
-                items.add(requestBody);
-                fileStorage.writeCollectionData(collection, items);
-            }
-            
-            return new DynamicResponse(requestBody, "Item created successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in POST request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
-        }
-    }
-    
-    private DynamicResponse handlePutRequest(RouteConfig route, Map<String, String> pathVars, 
-                                           Map<String, String> queryParams, Map<String, Object> requestBody) {
-        String collection = route.getCollection();
-        
-        try {
-            if (!pathVars.containsKey("id")) {
-                int validationCode = dynamicRouteService.getErrorStatusCode(route, "validation_error");
-                throw new MockApiException(validationCode, "ID path variable required for PUT requests");
-            }
-            
-            String id = pathVars.get("id");
-            
-            if (requestBody == null) {
-                requestBody = new HashMap<>();
-            }
-            
-            requestBody.put("id", id);
-            requestBody.put("updatedAt", new Date());
-            
-            applyParameterMappings(route, pathVars, queryParams, requestBody);
-            
-            boolean useIndividualFile = "individual_file".equals(route.getStorageStrategy());
-            
-            if (useIndividualFile) {
-                fileStorage.writeItemToCollection(collection, id, requestBody);
-            } else {
-                updateItemInCollection(collection, id, requestBody);
-            }
-            
-            return new DynamicResponse(requestBody, "Item updated successfully");
-            
-        } catch (MockApiException e) {
-            throw e;
-        } catch (Exception e) {
-            log.error("Error in PUT request for route: {}", route.getRouteId(), e);
-            throw new MockApiException(500, "Internal server error: " + e.getMessage());
-        }
-    }
-    
-    private DynamicResponse handleDeleteRequest(RouteConfig route, Map<String, String> pathVars, 
-                                              Map<String, String> queryParams) {
-        String collection = route.getCollection();
-        
-        try {
-            if (!pathVars.containsKey("id")) {

@@ -1,0 +1,2908 @@
+// ========================================
+// CHUNK 1: BASIC POST USE CASES
+// ========================================
+
+// POST Use Case 1: Simple GUID Response
+{
+  "routeId": "post_simple_guid",
+  "description": "POST endpoint returning only GUID",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/simple-create",
+    "collection": "simple_records",
+    "storageStrategy": "collection_file",
+    "requiredBodyParams": ["name"],
+    "optionalBodyParams": ["data"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "guid": "{{created_record_guid}}"
+    },
+    "delayMs": 100
+  }
+}
+
+// Example Request:
+POST /api/dynamic/simple-create
+{
+  "name": "Test Record",
+  "data": "Some additional data"
+}
+
+// Expected Response:
+HTTP 200 OK
+{
+  "guid": "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+
+// ========================================
+
+// POST Use Case 2: 201 with 6-digit contactId
+{
+  "routeId": "post_contact_creation",
+  "description": "POST endpoint creating contact with 6-digit ID",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/contacts",
+    "collection": "contacts",
+    "storageStrategy": "individual_file",
+    "requiredBodyParams": ["firstName", "lastName", "email"],
+    "optionalBodyParams": ["phone", "company"],
+    "fieldRules": [
+      {
+        "fieldName": "email",
+        "regexPattern": "^[\\w\\.-]+@[\\w\\.-]+\\.[a-zA-Z]{2,}$",
+        "statusCode": 422,
+        "message": "Invalid email format",
+        "responseBody": {
+          "error": "INVALID_EMAIL",
+          "field": "email",
+          "message": "Please provide a valid email address"
+        }
+      }
+    ]
+  },
+  "responseConfig": {
+    "statusCode": 201,
+    "responseBody": {
+      "responseObject": {
+        "contactId": "{{generated_6_digit_id}}",
+        "success": true
+      }
+    },
+    "customHeaders": {
+      "Location": "/api/contacts/{{generated_6_digit_id}}"
+    },
+    "delayMs": 200
+  }
+}
+
+// Example Request:
+POST /api/dynamic/contacts
+{
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "john.doe@example.com",
+  "phone": "+1-555-0123",
+  "company": "Tech Corp"
+}
+
+// Expected Response:
+HTTP 201 Created
+Location: /api/contacts/123456
+{
+  "responseObject": {
+    "contactId": "123456",
+    "success": true
+  }
+}
+
+// Example Validation Error:
+POST /api/dynamic/contacts
+{
+  "firstName": "John",
+  "lastName": "Doe",
+  "email": "invalid-email"
+}
+
+// Expected Error Response:
+HTTP 422 Unprocessable Entity
+{
+  "error": "INVALID_EMAIL",
+  "field": "email",
+  "message": "Please provide a valid email address"
+}
+
+// ========================================
+
+// POST Use Case 3: Report Generation with 200 status
+{
+  "routeId": "post_report_generation",
+  "description": "POST endpoint generating report",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/reports/generate",
+    "collection": "reports",
+    "storageStrategy": "individual_file",
+    "requiredBodyParams": ["reportType"],
+    "optionalBodyParams": ["filters", "dateRange"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "reportId": "{{created_record_guid}}"
+    },
+    "customHeaders": {
+      "X-Report-Status": "processing"
+    },
+    "delayMs": 500
+  }
+}
+
+// Example Request:
+POST /api/dynamic/reports/generate
+{
+  "reportType": "sales",
+  "filters": {
+    "region": "North America",
+    "product": "Software"
+  },
+  "dateRange": {
+    "start": "2024-01-01",
+    "end": "2024-12-31"
+  }
+}
+
+// Expected Response:
+HTTP 200 OK
+X-Report-Status: processing
+{
+  "reportId": "rpt-a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+
+// ========================================
+
+// POST Use Case 4: Full Created Object with Extras
+{
+  "routeId": "post_full_object_response",
+  "description": "POST endpoint returning full created object with extras",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/users",
+    "collection": "users",
+    "storageStrategy": "collection_file",
+    "requiredBodyParams": ["name", "email"],
+    "optionalBodyParams": ["age", "preferences"]
+  },
+  "responseConfig": {
+    "statusCode": 201,
+    "responseBody": "{{created_object_with_extras}}",
+    "additionalFields": {
+      "id": "{{created_record_guid}}",
+      "createdAt": "{{current_timestamp}}",
+      "version": "1.0",
+      "status": "active",
+      "permalink": "/users/{{created_record_guid}}"
+    },
+    "customHeaders": {
+      "Location": "/api/users/{{created_record_guid}}",
+      "X-Resource-Version": "1.0"
+    },
+    "delayMs": 300
+  }
+}
+
+// Example Request:
+POST /api/dynamic/users
+{
+  "name": "Jane Smith",
+  "email": "jane.smith@example.com",
+  "age": 28,
+  "preferences": {
+    "theme": "dark",
+    "notifications": true
+  }
+}
+
+// Expected Response:
+HTTP 201 Created
+Location: /api/users/usr-a1b2c3d4-e5f6-7890-abcd-ef1234567890
+X-Resource-Version: 1.0
+{
+  "name": "Jane Smith",
+  "email": "jane.smith@example.com",
+  "age": 28,
+  "preferences": {
+    "theme": "dark",
+    "notifications": true
+  },
+  "id": "usr-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "createdAt": "2024-08-20T14:30:25",
+  "version": "1.0",
+  "status": "active",
+  "permalink": "/users/usr-a1b2c3d4-e5f6-7890-abcd-ef1234567890"
+}
+
+
+
+
+// ========================================
+// CHUNK 2: POST SEARCH USE CASES
+// ========================================
+
+// POST Search Users with Complex Criteria
+{
+  "routeId": "post_users_search",
+  "description": "Search users using POST with complex search criteria",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/users/search",
+    "collection": "users",
+    "storageStrategy": "collection_file",
+    "requiredBodyParams": [],
+    "optionalBodyParams": ["name", "email", "age", "city", "skills", "dateRange"],
+    "customHeaders": {
+      "Authorization": "Bearer token"
+    },
+    "fieldRules": [
+      {
+        "fieldName": "email",
+        "regexPattern": "^[\\w\\.-]+@[\\w\\.-]+\\.[a-zA-Z]{2,}$",
+        "statusCode": 400,
+        "message": "Invalid email format in search criteria",
+        "responseBody": {
+          "error": "INVALID_EMAIL_SEARCH",
+          "field": "email"
+        }
+      }
+    ]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "results": "{{search_results}}",
+      "total": "{{total_count}}",
+      "searchCriteria": "{{request_body}}"
+    },
+    "conditionalResponses": [
+      {
+        "condition": "query:fast=true AND header:X-Fast-Search=enabled",
+        "statusCode": 200,
+        "message": "Fast search results",
+        "responseBody": {
+          "results": "{{search_results}}",
+          "total": "{{total_count}}",
+          "cached": true,
+          "searchTime": "5ms"
+        }
+      }
+    ],
+    "customHeaders": {
+      "X-Search-Time": "{{processing_time}}",
+      "X-Total-Results": "{{total_count}}"
+    },
+    "delayMs": 300
+  }
+}
+
+// Example Request:
+POST /api/dynamic/users/search
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+{
+  "name": "john",
+  "age": 25,
+  "city": "New York",
+  "skills": ["javascript", "react"],
+  "dateRange": {
+    "from": "2023-01-01",
+    "to": "2024-01-01"
+  }
+}
+
+// Expected Response:
+HTTP 200 OK
+X-Search-Time: 245ms
+X-Total-Results: 2
+{
+  "results": [
+    {
+      "id": "1",
+      "name": "John Doe",
+      "email": "john.doe@example.com",
+      "age": 25,
+      "city": "New York",
+      "skills": ["javascript", "react", "node.js"]
+    },
+    {
+      "id": "2", 
+      "name": "John Smith",
+      "email": "john.smith@example.com",
+      "age": 25,
+      "city": "New York",
+      "skills": ["javascript", "react", "python"]
+    }
+  ],
+  "total": 2,
+  "searchCriteria": {
+    "name": "john",
+    "age": 25,
+    "city": "New York",
+    "skills": ["javascript", "react"],
+    "dateRange": {
+      "from": "2023-01-01",
+      "to": "2024-01-01"
+    }
+  }
+}
+
+// Example Fast Search Request:
+POST /api/dynamic/users/search?fast=true
+Authorization: Bearer eyJ0eXAiOiJKV1QiLCJhbGciOiJIUzI1NiJ9...
+X-Fast-Search: enabled
+{
+  "name": "john"
+}
+
+// Expected Fast Search Response:
+HTTP 200 OK
+{
+  "results": [
+    {
+      "id": "1",
+      "name": "John Doe",
+      "email": "john.doe@example.com"
+    }
+  ],
+  "total": 1,
+  "cached": true,
+  "searchTime": "5ms"
+}
+
+// ========================================
+
+// POST Product Filter with Complex Criteria
+{
+  "routeId": "post_products_filter",
+  "description": "Filter products using POST with complex filter criteria",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/products/filter",
+    "collection": "products",
+    "storageStrategy": "collection_file",
+    "requiredBodyParams": ["filters"],
+    "optionalBodyParams": ["aggregations", "sort", "groupBy"],
+    "fieldRules": [
+      {
+        "fieldName": "filters.price.min",
+        "regexPattern": "^[0-9]+(\\.[0-9]{1,2})?$",
+        "statusCode": 422,
+        "message": "Minimum price must be a valid decimal",
+        "responseBody": {
+          "error": "INVALID_PRICE_FORMAT",
+          "field": "filters.price.min"
+        }
+      }
+    ]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "products": "{{filtered_results}}",
+      "count": "{{total_count}}",
+      "filters": "{{request_body.filters}}",
+      "aggregations": "{{computed_aggregations}}"
+    },
+    "conditionalResponses": [
+      {
+        "condition": "query:includeStats=true",
+        "statusCode": 200,
+        "message": "Products with statistics",
+        "responseBody": {
+          "products": "{{filtered_results}}",
+          "count": "{{total_count}}",
+          "statistics": {
+            "avgPrice": 299.99,
+            "categories": ["electronics", "books"],
+            "priceRange": {
+              "min": 9.99,
+              "max": 1299.99
+            }
+          }
+        }
+      }
+    ],
+    "delayMs": 450
+  }
+}
+
+// Example Request:
+POST /api/dynamic/products/filter
+{
+  "filters": {
+    "price": {
+      "min": 10.00,
+      "max": 100.00
+    },
+    "category": ["electronics", "books"],
+    "inStock": true
+  },
+  "sort": {
+    "field": "price",
+    "order": "asc"
+  },
+  "aggregations": ["category", "priceRange"]
+}
+
+// Expected Response:
+HTTP 200 OK
+{
+  "products": [
+    {
+      "id": "1",
+      "name": "Wireless Mouse",
+      "category": "electronics",
+      "price": 29.99,
+      "inStock": true
+    },
+    {
+      "id": "2",
+      "name": "Programming Book",
+      "category": "books",
+      "price": 45.99,
+      "inStock": true
+    },
+    {
+      "id": "3",
+      "name": "USB Cable",
+      "category": "electronics", 
+      "price": 12.99,
+      "inStock": true
+    }
+  ],
+  "count": 3,
+  "filters": {
+    "price": {
+      "min": 10.00,
+      "max": 100.00
+    },
+    "category": ["electronics", "books"],
+    "inStock": true
+  },
+  "aggregations": {
+    "categoryCount": {
+      "electronics": 2,
+      "books": 1
+    },
+    "priceRange": {
+      "min": 12.99,
+      "max": 45.99
+    }
+  }
+}
+
+// Example with Statistics:
+POST /api/dynamic/products/filter?includeStats=true
+{
+  "filters": {
+    "category": ["electronics"]
+  }
+}
+
+// Expected Response with Statistics:
+HTTP 200 OK
+{
+  "products": [
+    {
+      "id": "1",
+      "name": "Laptop",
+      "category": "electronics",
+      "price": 1299.99
+    },
+    {
+      "id": "2",
+      "name": "Mouse",
+      "category": "electronics",
+      "price": 29.99
+    }
+  ],
+  "count": 2,
+  "statistics": {
+    "avgPrice": 299.99,
+    "categories": ["electronics", "books"],
+    "priceRange": {
+      "min": 9.99,
+      "max": 1299.99
+    }
+  }
+}
+
+
+
+
+
+// ========================================
+// CHUNK 3: BASIC GET USE CASES
+// ========================================
+
+// GET Use Case 1: Results with Count
+{
+  "routeId": "get_with_count",
+  "description": "GET endpoint returning results and count",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/users",
+    "collection": "users",
+    "storageStrategy": "collection_file",
+    "optionalQueryParams": ["search", "status"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "results": "{{filtered_results}}",
+      "count": "{{total_count}}",
+      "hasMore": "{{has_more_results}}"
+    },
+    "delayMs": 150
+  }
+}
+
+// Example Request:
+GET /api/dynamic/users?status=active
+
+// Expected Response:
+HTTP 200 OK
+{
+  "results": [
+    {
+      "id": "1",
+      "name": "John Doe",
+      "email": "john.doe@example.com",
+      "status": "active"
+    },
+    {
+      "id": "2",
+      "name": "Jane Smith", 
+      "email": "jane.smith@example.com",
+      "status": "active"
+    },
+    {
+      "id": "3",
+      "name": "Bob Johnson",
+      "email": "bob.johnson@example.com",
+      "status": "active"
+    }
+  ],
+  "count": 3,
+  "hasMore": false
+}
+
+// ========================================
+
+// GET Use Case 2: Field Filtering (Include specific fields)
+{
+  "routeId": "get_users_include_fields",
+  "description": "GET endpoint including only specific fields",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/users/public",
+    "collection": "users",
+    "storageStrategy": "collection_file"
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": "{{filtered_results}}",
+    "fieldsToInclude": ["id", "name", "email", "avatar"],
+    "fieldsToExclude": null,
+    "delayMs": 100
+  }
+}
+
+// Example Request:
+GET /api/dynamic/users/public
+
+// Expected Response (Original data has password, ssn, internalNotes, salary fields):
+HTTP 200 OK
+[
+  {
+    "id": "1",
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "avatar": "https://example.com/avatars/john.jpg"
+  },
+  {
+    "id": "2",
+    "name": "Jane Smith",
+    "email": "jane.smith@example.com", 
+    "avatar": "https://example.com/avatars/jane.jpg"
+  },
+  {
+    "id": "3",
+    "name": "Bob Johnson",
+    "email": "bob.johnson@example.com",
+    "avatar": "https://example.com/avatars/bob.jpg"
+  }
+]
+
+// ========================================
+
+// GET Use Case 2b: Field Filtering (Exclude sensitive fields)
+{
+  "routeId": "get_users_exclude_fields",
+  "description": "GET endpoint excluding sensitive fields",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/users/safe",
+    "collection": "users",
+    "storageStrategy": "collection_file"
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": "{{filtered_results}}",
+    "fieldsToInclude": null,
+    "fieldsToExclude": ["password", "ssn", "internalNotes", "salary"],
+    "delayMs": 100
+  }
+}
+
+// Example Request:
+GET /api/dynamic/users/safe
+
+// Expected Response (Original data includes excluded fields):
+HTTP 200 OK
+[
+  {
+    "id": "1",
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "avatar": "https://example.com/avatars/john.jpg",
+    "phone": "+1-555-0123",
+    "status": "active",
+    "createdAt": "2024-01-15T10:30:00"
+    // password, ssn, internalNotes, salary excluded
+  },
+  {
+    "id": "2",
+    "name": "Jane Smith",
+    "email": "jane.smith@example.com", 
+    "avatar": "https://example.com/avatars/jane.jpg",
+    "phone": "+1-555-0456",
+    "status": "active",
+    "createdAt": "2024-02-20T14:15:00"
+    // password, ssn, internalNotes, salary excluded
+  }
+]
+
+// ========================================
+
+// GET Use Case 3: Results Wrapped Under Key
+{
+  "routeId": "get_wrapped_results",
+  "description": "GET endpoint with results wrapped under specific key",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/products",
+    "collection": "products",
+    "storageStrategy": "collection_file",
+    "optionalQueryParams": ["category", "inStock"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "products": "{{filtered_results}}",
+      "metadata": {
+        "total": "{{total_count}}",
+        "category": "{{query.category}}",
+        "timestamp": "{{current_timestamp}}"
+      }
+    },
+    "delayMs": 200
+  }
+}
+
+// Example Request:
+GET /api/dynamic/products?category=electronics&inStock=true
+
+// Expected Response:
+HTTP 200 OK
+{
+  "products": [
+    {
+      "id": "1",
+      "name": "Smartphone",
+      "category": "electronics",
+      "price": 599.99,
+      "inStock": true
+    },
+    {
+      "id": "2",
+      "name": "Laptop",
+      "category": "electronics", 
+      "price": 1299.99,
+      "inStock": true
+    },
+    {
+      "id": "3",
+      "name": "Wireless Headphones",
+      "category": "electronics",
+      "price": 199.99,
+      "inStock": true
+    }
+  ],
+  "metadata": {
+    "total": 3,
+    "category": "electronics",
+    "timestamp": "2024-08-20T14:30:25"
+  }
+}
+
+// Example Request without filters:
+GET /api/dynamic/products
+
+// Expected Response:
+HTTP 200 OK
+{
+  "products": [
+    {
+      "id": "1",
+      "name": "Smartphone",
+      "category": "electronics",
+      "price": 599.99,
+      "inStock": true
+    },
+    {
+      "id": "2",
+      "name": "Book: Java Programming",
+      "category": "books",
+      "price": 49.99,
+      "inStock": false
+    },
+    {
+      "id": "3",
+      "name": "Desk Chair",
+      "category": "furniture",
+      "price": 299.99,
+      "inStock": true
+    }
+  ],
+  "metadata": {
+    "total": 3,
+    "category": "",
+    "timestamp": "2024-08-20T14:30:25"
+  }
+}
+
+
+
+
+
+
+
+// ========================================
+// CHUNK 4: GET PAGINATION USE CASES
+// ========================================
+
+// GET Use Case 4: Pagination with Offset/Limit
+{
+  "routeId": "get_with_pagination",
+  "description": "GET endpoint with offset/limit pagination",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/orders",
+    "collection": "orders",
+    "storageStrategy": "collection_file",
+    "optionalQueryParams": ["offset", "limit", "sortBy", "sortOrder"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "data": "{{paginated_results}}",
+      "pagination": {
+        "offset": "{{query.offset}}",
+        "limit": "{{query.limit}}",
+        "total": "{{total_count}}",
+        "hasNext": "{{has_next_page}}",
+        "hasPrevious": "{{has_previous_page}}"
+      }
+    },
+    "conditionalResponses": [
+      {
+        "condition": "query:limit>100",
+        "statusCode": 400,
+        "message": "Limit too high",
+        "responseBody": {
+          "error": "LIMIT_EXCEEDED",
+          "message": "Maximum limit is 100",
+          "maxLimit": 100
+        }
+      }
+    ],
+    "delayMs": 250
+  }
+}
+
+// Example Request (First page):
+GET /api/dynamic/orders?offset=0&limit=5&sortBy=date
+
+// Expected Response (assuming 50 total orders):
+HTTP 200 OK
+{
+  "data": [
+    {
+      "id": "1",
+      "orderNumber": "ORD-001001",
+      "customer": "John Doe",
+      "total": 125.99,
+      "date": "2024-08-10"
+    },
+    {
+      "id": "2",
+      "orderNumber": "ORD-001002", 
+      "customer": "Jane Smith",
+      "total": 89.50,
+      "date": "2024-08-11"
+    },
+    {
+      "id": "3",
+      "orderNumber": "ORD-001003",
+      "customer": "Bob Johnson",
+      "total": 199.99,
+      "date": "2024-08-12"
+    },
+    {
+      "id": "4",
+      "orderNumber": "ORD-001004",
+      "customer": "Alice Brown",
+      "total": 75.25,
+      "date": "2024-08-13"
+    },
+    {
+      "id": "5",
+      "orderNumber": "ORD-001005",
+      "customer": "Charlie Wilson",
+      "total": 234.75,
+      "date": "2024-08-14"
+    }
+  ],
+  "pagination": {
+    "offset": "0",
+    "limit": "5", 
+    "total": 50,
+    "hasNext": true,
+    "hasPrevious": false
+  }
+}
+
+// Example Request (Middle page):
+GET /api/dynamic/orders?offset=10&limit=5&sortBy=date
+
+// Expected Response:
+HTTP 200 OK
+{
+  "data": [
+    {
+      "id": "11",
+      "orderNumber": "ORD-001011",
+      "customer": "David Lee",
+      "total": 156.80,
+      "date": "2024-08-15"
+    },
+    {
+      "id": "12",
+      "orderNumber": "ORD-001012", 
+      "customer": "Emma Davis",
+      "total": 92.30,
+      "date": "2024-08-16"
+    },
+    {
+      "id": "13",
+      "orderNumber": "ORD-001013",
+      "customer": "Frank Miller",
+      "total": 267.45,
+      "date": "2024-08-17"
+    },
+    {
+      "id": "14",
+      "orderNumber": "ORD-001014",
+      "customer": "Grace Taylor",
+      "total": 134.60,
+      "date": "2024-08-18"
+    },
+    {
+      "id": "15",
+      "orderNumber": "ORD-001015",
+      "customer": "Henry Anderson",
+      "total": 189.95,
+      "date": "2024-08-19"
+    }
+  ],
+  "pagination": {
+    "offset": "10",
+    "limit": "5", 
+    "total": 50,
+    "hasNext": true,
+    "hasPrevious": true
+  }
+}
+
+// Example Limit Error:
+GET /api/dynamic/orders?limit=150
+
+// Expected Error Response:
+HTTP 400 Bad Request
+{
+  "error": "LIMIT_EXCEEDED",
+  "message": "Maximum limit is 100",
+  "maxLimit": 100
+}
+
+// ========================================
+
+// Advanced Pagination with Search and Filters
+{
+  "routeId": "get_advanced_pagination",
+  "description": "Advanced pagination with metadata and search",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/products/search",
+    "collection": "products",
+    "storageStrategy": "collection_file",
+    "optionalQueryParams": ["offset", "limit", "category", "sortBy", "q"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "products": "{{paginated_filtered_results}}",
+      "pagination": {
+        "offset": "{{query.offset}}",
+        "limit": "{{query.limit}}",
+        "total": "{{total_count}}",
+        "returned": "{{returned_count}}",
+        "hasNext": "{{has_next_page}}",
+        "hasPrevious": "{{has_previous_page}}"
+      },
+      "filters": {
+        "category": "{{query.category}}",
+        "sortBy": "{{query.sortBy}}",
+        "searchQuery": "{{query.q}}"
+      },
+      "meta": {
+        "requestId": "{{generated_guid}}",
+        "timestamp": "{{current_timestamp}}"
+      }
+    },
+    "conditionalResponses": [
+      {
+        "condition": "query:offset=0 AND query:limit=1",
+        "statusCode": 200,
+        "message": "Single item response",
+        "responseBody": {
+          "product": "{{paginated_filtered_results}}",
+          "singleItem": true,
+          "total": "{{total_count}}"
+        }
+      }
+    ],
+    "delayMs": 180
+
+
+
+
+
+
+
+// ========================================
+// CHUNK 5: NESTED FIELD EXAMPLES
+// ========================================
+
+// Student Registration with Complex Nested Validation
+{
+  "routeId": "post_student_registration",
+  "description": "Student registration with nested validation",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/students",
+    "collection": "students",
+    "storageStrategy": "collection_file",
+    "requiredBodyParams": [
+      "name",
+      "email",
+      "student.id",
+      "student.departments[].name",
+      "student.departments[].building.id"
+    ],
+    "optionalBodyParams": [
+      "student.preferences.notifications",
+      "contactInfo.phone",
+      "contactInfo.address.street"
+    ],
+    "fieldRules": [
+      {
+        "fieldName": "student.departments[].building.id",
+        "regexPattern": "^[0-9][A-Z]$",
+        "statusCode": 422,
+        "message": "Building ID must be 2-character alphanumeric (e.g., 2A, 4C)",
+        "responseBody": {
+          "error": "INVALID_BUILDING_ID",
+          "field": "student.departments[].building.id",
+          "pattern": "Must be 2 characters: digit + letter (e.g., 2A, 4C)",
+          "examples": ["1A", "2B", "9Z"]
+        }
+      },
+      {
+        "fieldName": "student.id",
+        "regexPattern": "^STU[0-9]{6}$",
+        "statusCode": 422,
+        "message": "Student ID must be STU followed by 6 digits",
+        "responseBody": {
+          "error": "INVALID_STUDENT_ID",
+          "field": "student.id",
+          "pattern": "STU123456"
+        }
+      }
+    ]
+  },
+  "responseConfig": {
+    "statusCode": 201,
+    "responseBody": {
+      "studentId": "{{created_record_guid}}",
+      "registrationNumber": "{{generated_6_digit_id}}",
+      "message": "Student registered successfully"
+    },
+    "fieldsToExclude": ["student.preferences.private"],
+    "additionalFields": {
+      "registeredAt": "{{current_timestamp}}",
+      "academicYear": "2024-2025"
+    },
+    "delayMs": 300
+  }
+}
+
+// Example Valid Request:
+POST /api/dynamic/students
+{
+  "name": "John Doe",
+  "email": "john.doe@university.edu",
+  "student": {
+    "id": "STU123456",
+    "departments": [
+      {
+        "name": "Computer Science",
+        "building": {
+          "id": "2A",
+          "name": "Tech Building"
+        }
+      },
+      {
+        "name": "Mathematics",
+        "building": {
+          "id": "4C",
+          "name": "Science Hall"
+        }
+      }
+    ],
+    "preferences": {
+      "notifications": true,
+      "theme": "dark",
+      "private": "sensitive_data"
+    }
+  },
+  "contactInfo": {
+    "phone": "+1-555-0123",
+    "address": {
+      "street": "123 University Ave",
+      "city": "College Town"
+    }
+  }
+}
+
+// Expected Response:
+HTTP 201 Created
+{
+  "studentId": "stu-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "registrationNumber": "234567",
+  "message": "Student registered successfully",
+  "registeredAt": "2024-08-20T14:30:25",
+  "academicYear": "2024-2025"
+}
+
+// Example Validation Error (Invalid Building ID):
+POST /api/dynamic/students
+{
+  "name": "John Doe",
+  "email": "john.doe@university.edu",
+  "student": {
+    "id": "STU123456",
+    "departments": [
+      {
+        "name": "Computer Science",
+        "building": {
+          "id": "2AB",  // Invalid - should be 2A
+          "name": "Tech Building"
+        }
+      }
+    ]
+  }
+}
+
+// Expected Error Response:
+HTTP 422 Unprocessable Entity
+{
+  "error": "INVALID_BUILDING_ID",
+  "field": "student.departments[].building.id",
+  "pattern": "Must be 2 characters: digit + letter (e.g., 2A, 4C)",
+  "examples": ["1A", "2B", "9Z"]
+}
+
+// Example Missing Required Field Error:
+POST /api/dynamic/students
+{
+  "name": "John Doe",
+  "email": "john.doe@university.edu",
+  "student": {
+    "id": "STU123456",
+    "departments": [
+      {
+        "name": "Computer Science"
+        // Missing required "building.id"
+      }
+    ]
+  }
+}
+
+// Expected Error Response:
+HTTP 400 Bad Request
+{
+  "statusCode": 400,
+  "message": "Missing required parameters: student.departments[].building.id",
+  "timestamp": "2024-08-20T14:30:25"
+}
+
+// ========================================
+
+// Product with Complex Nested Structure and Array Validation
+{
+  "routeId": "post_product_catalog",
+  "description": "Product catalog with nested itemization",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/products",
+    "collection": "products",
+    "storageStrategy": "individual_file",
+    "requiredBodyParams": [
+      "name",
+      "itemization.itemnum",
+      "itemization.pricing.base",
+      "categories[].name"
+    ],
+    "optionalBodyParams": [
+      "itemization.pricing.discounts[].percentage",
+      "specifications.dimensions.height"
+    ],
+    "fieldRules": [
+      {
+        "fieldName": "itemization.itemnum",
+        "regexPattern": "^ITM-[0-9]{4}-[A-Z]{2}$",
+        "statusCode": 422,
+        "message": "Item number must follow format ITM-XXXX-YY",
+        "responseBody": {
+          "error": "INVALID_ITEM_NUMBER",
+          "field": "itemization.itemnum",
+          "format": "ITM-1234-AB"
+        }
+      },
+      {
+        "fieldName": "itemization.pricing.discounts[].percentage",
+        "regexPattern": "^([0-9]|[1-9][0-9])$",
+        "statusCode": 422,
+        "message": "Discount percentage must be 0-99",
+        "responseBody": {
+          "error": "INVALID_DISCOUNT_PERCENTAGE",
+          "field": "itemization.pricing.discounts[].percentage",
+          "range": "0-99"
+        }
+      }
+    ]
+  },
+  "responseConfig": {
+    "statusCode": 201,
+    "responseBody": {
+      "productId": "{{created_record_guid}}",
+      "itemNumber": "{{request_body.itemization.itemnum}}",
+      "success": true
+    },
+    "fieldsToExclude": [
+      "itemization.pricing.cost",
+      "metadata.internal"
+    ],
+    "delayMs": 250
+  }
+}
+
+// Example Valid Request:
+POST /api/dynamic/products
+{
+  "name": "Premium Laptop",
+  "itemization": {
+    "itemnum": "ITM-5678-AB",
+    "pricing": {
+      "base": 1299.99,
+      "discounts": [
+        {
+          "type": "student",
+          "percentage": 10
+        },
+        {
+          "type": "bulk",
+          "percentage": 15
+        }
+      ],
+      "cost": 800.00
+    }
+  },
+  "categories": [
+    {
+      "name": "Electronics",
+      "subcategory": "Computers"
+    },
+    {
+      "name": "Business",
+      "subcategory": "Laptops"
+    }
+  ],
+  "specifications": {
+    "dimensions": {
+      "height": 2.1,
+      "width": 14.2,
+      "depth": 9.8
+    }
+  },
+  "metadata": {
+    "internal": "sensitive_data",
+    "public": "marketing_info"
+  }
+}
+
+// Expected Response:
+HTTP 201 Created
+{
+  "productId": "prd-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "itemNumber": "ITM-5678-AB",
+  "success": true
+}
+
+// Example Validation Error (Invalid discount percentage):
+POST /api/dynamic/products
+{
+  "name": "Premium Laptop",
+  "itemization": {
+    "itemnum": "ITM-5678-AB",
+    "pricing": {
+      "base": 1299.99,
+      "discounts": [
+        {
+          "type": "student",
+          "percentage": 150  // Invalid - over 99
+        }
+      ]
+    }
+  },
+  "categories": [
+    {"name": "Electronics"}
+  ]
+}
+
+// Expected Error Response:
+HTTP 422 Unprocessable Entity
+{
+  "error": "INVALID_DISCOUNT_PERCENTAGE",
+  "field": "itemization.pricing.discounts[].percentage",
+  "range": "0-99"
+}
+
+// Example Validation Error (Invalid item number):
+POST /api/dynamic/products
+{
+  "name": "Premium Laptop",
+  "itemization": {
+    "itemnum": "ITEM-5678-AB",  // Invalid - should be ITM-XXXX-YY
+    "pricing": {
+      "base": 1299.99
+    }
+  },
+  "categories": [
+    {"name": "Electronics"}
+  ]
+}
+
+// Expected Error Response:
+HTTP 422 Unprocessable Entity
+{
+  "error": "INVALID_ITEM_NUMBER",
+  "field": "itemization.itemnum",
+  "format": "ITM-1234-AB"
+}
+
+
+
+
+
+
+
+
+// ========================================
+// CHUNK 6: GET WITH NESTED FIELD FILTERING
+// ========================================
+
+// GET User Profile with Complex Nested Field Filtering
+{
+  "routeId": "get_user_profile_nested",
+  "description": "GET user profile with nested field filtering",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/users/{id}/profile",
+    "collection": "users",
+    "storageStrategy": "collection_file",
+    "requiredPathParams": ["id"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": "{{found_user}}",
+    "fieldsToInclude": [
+      "id",
+      "name",
+      "email",
+      "profile.bio",
+      "profile.avatar",
+      "preferences[].category",
+      "preferences[].settings.notifications",
+      "contactInfo.phone"
+    ],
+    "fieldsToExclude": [
+      "preferences[].settings.private",
+      "contactInfo.address.internal",
+      "profile.internalNotes"
+    ],
+    "fieldAliases": {
+      "id": "userId",
+      "profile.bio": "biography"
+    },
+    "delayMs": 150
+  }
+}
+
+// Example Request:
+GET /api/dynamic/users/123/profile
+
+// Expected Response (Original data includes private settings, internal data):
+HTTP 200 OK
+{
+  "userId": "123",
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "biography": "Software developer with 5+ years experience",
+  "profile": {
+    "avatar": "https://example.com/avatars/john.jpg"
+  },
+  "preferences": [
+    {
+      "category": "notifications",
+      "settings": {
+        "notifications": true
+        // "private" field excluded
+      }
+    },
+    {
+      "category": "display",
+      "settings": {
+        "notifications": false
+        // "private" field excluded
+      }
+    }
+  ],
+  "contactInfo": {
+    "phone": "+1-555-0123"
+    // "address.internal" field excluded
+  }
+}
+
+// ========================================
+
+// GET Orders with Complex Nested Item Filtering
+{
+  "routeId": "get_orders_with_items",
+  "description": "GET orders with nested item filtering",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/orders",
+    "collection": "orders",
+    "storageStrategy": "collection_file",
+    "optionalQueryParams": ["includeInternal"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "orders": "{{filtered_results}}",
+      "count": "{{total_count}}"
+    },
+    "fieldsToInclude": [
+      "id",
+      "orderNumber",
+      "customer.name",
+      "customer.email",
+      "items[].productId",
+      "items[].quantity",
+      "items[].price",
+      "shipping.address.street",
+      "shipping.address.city",
+      "totals.subtotal",
+      "totals.tax",
+      "totals.total"
+    ],
+    "fieldsToExclude": [
+      "items[].cost",
+      "items[].margin",
+      "customer.internalId",
+      "shipping.address.coordinates",
+      "totals.breakdown"
+    ],
+    "conditionalResponses": [
+      {
+        "condition": "query:includeInternal=true",
+        "statusCode": 200,
+        "message": "Orders with internal data",
+        "responseBody": {
+          "orders": "{{filtered_results}}",
+          "count": "{{total_count}}",
+          "includesInternal": true
+        }
+      }
+    ],
+    "delayMs": 200
+  }
+}
+
+// Example Request:
+GET /api/dynamic/orders
+
+// Expected Response (showing complex nested filtering):
+HTTP 200 OK
+{
+  "orders": [
+    {
+      "id": "ord-001",
+      "orderNumber": "ORD-123456",
+      "customer": {
+        "name": "Jane Smith",
+        "email": "jane.smith@example.com"
+        // "internalId" excluded
+      },
+      "items": [
+        {
+          "productId": "prd-001",
+          "quantity": 2,
+          "price": 99.99
+          // "cost" and "margin" excluded
+        },
+        {
+          "productId": "prd-002",
+          "quantity": 1,
+          "price": 49.99
+          // "cost" and "margin" excluded
+        }
+      ],
+      "shipping": {
+        "address": {
+          "street": "123 Main St",
+          "city": "Boston"
+          // "coordinates" excluded
+        }
+      },
+      "totals": {
+        "subtotal": 249.97,
+        "tax": 20.00,
+        "total": 269.97
+        // "breakdown" excluded
+      }
+    },
+    {
+      "id": "ord-002",
+      "orderNumber": "ORD-123457",
+      "customer": {
+        "name": "Bob Johnson",
+        "email": "bob.johnson@example.com"
+      },
+      "items": [
+        {
+          "productId": "prd-003",
+          "quantity": 1,
+          "price": 199.99
+        }
+      ],
+      "shipping": {
+        "address": {
+          "street": "456 Oak Ave",
+          "city": "New York"
+        }
+      },
+      "totals": {
+        "subtotal": 199.99,
+        "tax": 16.00,
+        "total": 215.99
+      }
+    }
+  ],
+  "count": 2
+}
+
+// ========================================
+
+// GET with Both Include and Exclude Filtering
+{
+  "routeId": "get_complex_filtering",
+  "description": "Complex field filtering with include/exclude combinations",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/users/{id}/complete",
+    "collection": "users",
+    "storageStrategy": "collection_file",
+    "requiredPathParams": ["id"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": "{{found_user}}",
+    "fieldsToInclude": [
+      "id",
+      "name", 
+      "email",
+      "profile.bio",
+      "profile.avatar",
+      "preferences[].category",
+      "preferences[].settings",
+      "contactInfo",
+      "orders[].id",
+      "orders[].total",
+      "orders[].items[].name"
+    ],
+    "fieldsToExclude": [
+      "preferences[].settings.private",
+      "contactInfo.ssn",
+      "orders[].items[].cost"
+    ],
+    "fieldAliases": {
+      "id": "userId",
+      "profile.bio": "biography",
+      "orders[].total": "orderAmount"
+    },
+    "additionalFields": {
+      "requestedAt": "{{current_timestamp}}",
+      "profileComplete": true
+    },
+    "delayMs": 120
+  }
+}
+
+// Example Request:
+GET /api/dynamic/users/456/complete
+
+// Expected Response (showing complex nested filtering with aliases):
+HTTP 200 OK
+{
+  "userId": "456",
+  "name": "Jane Smith",
+  "email": "jane.smith@example.com",
+  "biography": "Product manager with 8 years experience",
+  "profile": {
+    "avatar": "https://example.com/avatars/jane.jpg"
+  },
+  "preferences": [
+    {
+      "category": "notifications",
+      "settings": {
+        "email": true,
+        "push": false
+        // "private" excluded
+      }
+    },
+    {
+      "category": "privacy",
+      "settings": {
+        "publicProfile": false
+        // "private" excluded
+      }
+    }
+  ],
+  "contactInfo": {
+    "phone": "+1-555-0199",
+    "address": {
+      "street": "456 Main St",
+      "city": "Boston",
+      "state": "MA"
+    }
+    // "ssn" excluded
+  },
+  "orders": [
+    {
+      "id": "ord-001",
+      "orderAmount": 299.99,  // aliased from "total"
+      "items": [
+        {
+          "name": "Wireless Headphones"
+          // "cost" excluded
+        },
+        {
+          "name": "Phone Case"
+          // "cost" excluded
+        }
+      ]
+    },
+    {
+      "id": "ord-002", 
+      "orderAmount": 149.50,  // aliased from "total"
+      "items": [
+        {
+          "name": "Bluetooth Speaker"
+          // "cost" excluded
+        }
+      ]
+    }
+  ],
+  "requestedAt": "2024-08-20T14:30:25",
+  "profileComplete": true
+}
+
+
+
+
+
+
+
+
+
+
+      // ========================================
+// CHUNK 7: CONDITIONAL RESPONSE EXAMPLES
+// ========================================
+
+// Advanced Conditional Response Based on Headers and Query Params
+{
+  "routeId": "get_user_conditional",
+  "description": "GET user with conditional responses based on headers",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/users/{id}",
+    "collection": "users", 
+    "storageStrategy": "collection_file",
+    "requiredPathParams": ["id"],
+    "customHeaders": {
+      "Authorization": "Bearer token"
+    }
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": "{{found_user}}",
+    "fieldsToExclude": ["password", "internalNotes"],
+    "conditionalResponses": [
+      {
+        "condition": "header:X-User-Role=admin",
+        "statusCode": 200,
+        "message": "Full user data for admin",
+        "responseBody": {
+          "user": "{{found_user}}",
+          "adminView": true,
+          "internalData": {
+            "lastLogin": "2024-08-20T10:15:30",
+            "loginCount": 45
+          }
+        }
+      },
+      {
+        "condition": "header:X-User-Role=public",
+        "statusCode": 200,
+        "message": "Public user data",
+        "responseBody": {
+          "id": "{{path.id}}",
+          "name": "{{found_user.name}}",
+          "publicProfile": true,
+          "limitedView": true
+        }
+      },
+      {
+        "condition": "query:format=summary AND header:X-Client=mobile",
+        "statusCode": 200,
+        "message": "Mobile summary view",
+        "responseBody": {
+          "id": "{{path.id}}",
+          "name": "{{found_user.name}}",
+          "avatar": "{{found_user.profile.avatar}}",
+          "mobileOptimized": true
+        }
+      }
+    ],
+    "delayMs": 180
+  }
+}
+
+// Example Admin Request:
+GET /api/dynamic/users/123
+Authorization: Bearer admin-token
+X-User-Role: admin
+
+// Expected Admin Response:
+HTTP 200 OK
+{
+  "user": {
+    "id": "123",
+    "name": "John Doe",
+    "email": "john.doe@example.com",
+    "profile": {
+      "bio": "Software developer",
+      "avatar": "https://example.com/avatars/john.jpg"
+    },
+    "lastLogin": "2024-08-20T10:15:30",
+    "loginCount": 45
+  },
+  "adminView": true,
+  "internalData": {
+    "lastLogin": "2024-08-20T10:15:30",
+    "loginCount": 45
+  }
+}
+
+// Example Public Request:
+GET /api/dynamic/users/123
+Authorization: Bearer public-token
+X-User-Role: public
+
+// Expected Public Response:
+HTTP 200 OK
+{
+  "id": "123",
+  "name": "John Doe",
+  "publicProfile": true,
+  "limitedView": true
+}
+
+// Example Mobile Request:
+GET /api/dynamic/users/123?format=summary
+Authorization: Bearer mobile-token
+X-Client: mobile
+
+// Expected Mobile Response:
+HTTP 200 OK
+{
+  "id": "123",
+  "name": "John Doe",
+  "avatar": "https://example.com/avatars/john.jpg",
+  "mobileOptimized": true
+}
+
+// Example Default Request (no special conditions):
+GET /api/dynamic/users/123
+Authorization: Bearer regular-token
+
+// Expected Default Response:
+HTTP 200 OK
+{
+  "id": "123",
+  "name": "John Doe",
+  "email": "john.doe@example.com",
+  "profile": {
+    "bio": "Software developer",
+    "avatar": "https://example.com/avatars/john.jpg"
+  },
+  "phone": "+1-555-0123",
+  "status": "active"
+  // "password" and "internalNotes" excluded
+}
+
+// ========================================
+
+// POST with Conditional Response for Premium Users
+{
+  "routeId": "post_order_conditional",
+  "description": "POST order with conditional response for premium customers",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/orders",
+    "collection": "orders",
+    "storageStrategy": "individual_file",
+    "requiredBodyParams": ["customer.email", "items[].productId"],
+    "customHeaders": {
+      "Authorization": "Bearer token"
+    }
+  },
+  "responseConfig": {
+    "statusCode": 201,
+    "responseBody": {
+      "order": {
+        "id": "{{created_record_guid}}",
+        "orderNumber": "ORD-{{generated_6_digit_id}}",
+        "status": "confirmed"
+      }
+    },
+    "conditionalResponses": [
+      {
+        "condition": "query:express=true AND header:X-Premium-Customer=true",
+        "statusCode": 201,
+        "message": "Express order for premium customer",
+        "responseBody": {
+          "order": {
+            "id": "{{created_record_guid}}",
+            "orderNumber": "EXP-{{generated_6_digit_id}}",
+            "status": "express_confirmed",
+            "priority": "high",
+            "expressDelivery": true,
+            "estimatedDelivery": "{{express_delivery_date}}"
+          },
+          "premiumPerks": {
+            "freeShipping": true,
+            "expressProcessing": true,
+            "dedicatedSupport": true
+          }
+        }
+      },
+      {
+        "condition": "header:X-First-Time-Customer=true",
+        "statusCode": 201,
+        "message": "Welcome bonus for new customer",
+        "responseBody": {
+          "order": {
+            "id": "{{created_record_guid}}",
+            "orderNumber": "NEW-{{generated_6_digit_id}}",
+            "status": "confirmed",
+            "welcomeBonus": true
+          },
+          "bonuses": {
+            "discount": "10% off next order",
+            "freeShipping": true,
+            "welcomeGift": "Starter package included"
+          }
+        }
+      }
+    ],
+    "delayMs": 300
+  }
+}
+
+// Example Regular Customer Request:
+POST /api/dynamic/orders
+Authorization: Bearer customer-token
+{
+  "customer": {
+    "email": "john.doe@example.com"
+  },
+  "items": [
+    {
+      "productId": "prd-001",
+      "quantity": 1
+    }
+  ]
+}
+
+// Expected Regular Response:
+HTTP 201 Created
+{
+  "order": {
+    "id": "ord-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "orderNumber": "ORD-123456",
+    "status": "confirmed"
+  }
+}
+
+// Example Premium Express Request:
+POST /api/dynamic/orders?express=true
+Authorization: Bearer premium-customer-token
+X-Premium-Customer: true
+{
+  "customer": {
+    "email": "jane.premium@example.com"
+  },
+  "items": [
+    {
+      "productId": "prd-premium-001",
+      "quantity": 1
+    }
+  ]
+}
+
+// Expected Premium Express Response:
+HTTP 201 Created
+{
+  "order": {
+    "id": "ord-premium-123",
+    "orderNumber": "EXP-456789",
+    "status": "express_confirmed",
+    "priority": "high",
+    "expressDelivery": true,
+    "estimatedDelivery": "2024-08-21T14:30:25"
+  },
+  "premiumPerks": {
+    "freeShipping": true,
+    "expressProcessing": true,
+    "dedicatedSupport": true
+  }
+}
+
+// Example First-Time Customer Request:
+POST /api/dynamic/orders
+Authorization: Bearer new-customer-token
+X-First-Time-Customer: true
+{
+  "customer": {
+    "email": "newbie@example.com"
+  },
+  "items": [
+    {
+      "productId": "prd-starter-001",
+      "quantity": 1
+    }
+  ]
+}
+
+// Expected First-Time Customer Response:
+HTTP 201 Created
+{
+  "order": {
+    "id": "ord-new-456",
+    "orderNumber": "NEW-789012",
+    "status": "confirmed",
+    "welcomeBonus": true
+  },
+  "bonuses": {
+    "discount": "10% off next order",
+    "freeShipping": true,
+    "welcomeGift": "Starter package included"
+  }
+}
+
+// ========================================
+
+// GET with Path-Based Conditional Responses
+{
+  "routeId": "get_api_conditional_path",
+  "description": "API endpoint with path-based conditional responses",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/data/{category}",
+    "collection": "mixed_data",
+    "storageStrategy": "collection_file",
+    "requiredPathParams": ["category"],
+    "optionalQueryParams": ["format", "version"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "data": "{{filtered_results}}",
+      "category": "{{path.category}}"
+    },
+    "conditionalResponses": [
+      {
+        "condition": "path:/premium",
+        "statusCode": 200,
+        "message": "Premium data access",
+        "responseBody": {
+          "data": "{{filtered_results}}",
+          "category": "{{path.category}}",
+          "premium": true,
+          "features": ["advanced_analytics", "real_time_updates", "priority_support"]
+        }
+      },
+      {
+        "condition": "path:/analytics AND query:format=summary",
+        "statusCode": 200,
+        "message": "Analytics summary",
+        "responseBody": {
+          "summary": {
+            "totalRecords": "{{total_count}}",
+            "category": "{{path.category}}",
+            "lastUpdated": "{{current_timestamp}}"
+          },
+          "analytics": true
+        }
+      },
+      {
+        "condition": "query:version=v2",
+        "statusCode": 200,
+        "message": "API v2 response format",
+        "responseBody": {
+          "apiVersion": "2.0",
+          "result": {
+            "items": "{{filtered_results}}",
+            "metadata": {
+              "category": "{{path.category}}",
+              "count": "{{total_count}}",
+              "timestamp": "{{current_timestamp}}"
+            }
+          }
+        }
+      }
+    ],
+    "delayMs": 150
+  }
+}
+
+// Example Regular Request:
+GET /api/dynamic/data/users
+
+// Expected Regular Response:
+HTTP 200 OK
+{
+  "data": [
+    {
+      "id": "1",
+      "name": "John Doe",
+      "type": "user"
+    },
+    {
+      "id": "2",
+      "name": "Jane Smith",
+      "type": "user"
+    }
+  ],
+  "category": "users"
+}
+
+// Example Premium Request:
+GET /api/dynamic/data/premium
+
+// Expected Premium Response:
+HTTP 200 OK
+{
+  "data": [
+    {
+      "id": "1",
+      "name": "Premium User 1",
+      "type": "premium",
+      "tier": "gold"
+    },
+    {
+      "id": "2",
+      "name": "Premium User 2",
+      "type": "premium",
+      "tier": "platinum"
+    }
+  ],
+  "category": "premium",
+  "premium": true,
+  "features": ["advanced_analytics", "real_time_updates", "priority_support"]
+}
+
+// Example Analytics Summary Request:
+GET /api/dynamic/data/analytics?format=summary
+
+// Expected Analytics Summary Response:
+HTTP 200 OK
+{
+  "summary": {
+    "totalRecords": 150,
+    "category": "analytics",
+    "lastUpdated": "2024-08-20T14:30:25"
+  },
+  "analytics": true
+}
+
+// Example V2 API Request:
+GET /api/dynamic/data/products?version=v2
+
+// Expected V2 API Response:
+HTTP 200 OK
+{
+  "apiVersion": "2.0",
+  "result": {
+    "items": [
+      {
+        "id": "1",
+        "name": "Product A",
+        "price": 99.99
+      },
+      {
+        "id": "2",
+        "name": "Product B",
+        "price": 149.99
+      }
+    ],
+    "metadata": {
+      "category": "products",
+      "count": 2,
+      "timestamp": "2024-08-20T14:30:25"
+    }
+  }
+}
+
+
+
+
+
+// ========================================
+// CHUNK 8: TEMPLATE VARIABLES COMPREHENSIVE EXAMPLES
+// ========================================
+
+// All Template Variables in Action
+{
+  "routeId": "post_comprehensive_templates",
+  "description": "Comprehensive example showing all template variables",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/comprehensive/{category}",
+    "collection": "comprehensive",
+    "storageStrategy": "collection_file",
+    "requiredBodyParams": ["name"],
+    "optionalBodyParams": ["data"]
+  },
+  "responseConfig": {
+    "statusCode": 201,
+    "responseBody": {
+      "id": "{{created_record_guid}}",
+      "sixDigitId": "{{generated_6_digit_id}}",
+      "createdAt": "{{current_timestamp}}",
+      "date": "{{current_date}}",
+      "timestamp": "{{timestamp}}",
+      "category": "{{path.category}}",
+      "queryParam": "{{query.source}}",
+      "headerValue": "{{header.X-Client-Version}}",
+      "originalRequest": "{{request_body}}",
+      "createdObject": "{{created_object_with_extras}}"
+    },
+    "customHeaders": {
+      "X-Generated-ID": "{{created_record_guid}}",
+      "X-Processing-Time": "{{processing_time}}",
+      "X-Timestamp": "{{current_timestamp}}"
+    },
+    "additionalFields": {
+      "serverInfo": {
+        "processedAt": "{{current_timestamp}}",
+        "guid": "{{generated_guid}}",
+        "version": "2.0"
+      }
+    },
+    "delayMs": 200
+  }
+}
+
+// Example Request:
+POST /api/dynamic/comprehensive/electronics?source=mobile&version=2.1
+X-Client-Version: mobile-app-v2.1
+{
+  "name": "Sample Product",
+  "data": {
+    "description": "Test product",
+    "price": 99.99
+  }
+}
+
+// Expected Response:
+HTTP 201 Created
+X-Generated-ID: cmp-a1b2c3d4-e5f6-7890-abcd-ef1234567890
+X-Processing-Time: 145ms
+X-Timestamp: 2024-08-20T14:30:25
+{
+  "id": "cmp-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "sixDigitId": "789123",
+  "createdAt": "2024-08-20T14:30:25",
+  "date": "2024-08-20",
+  "timestamp": "1692543025000",
+  "category": "electronics",
+  "queryParam": "mobile",
+  "headerValue": "mobile-app-v2.1",
+  "originalRequest": {
+    "name": "Sample Product",
+    "data": {
+      "description": "Test product",
+      "price": 99.99
+    }
+  },
+  "createdObject": {
+    "id": "cmp-a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+    "name": "Sample Product",
+    "data": {
+      "description": "Test product",
+      "price": 99.99
+    },
+    "createdAt": "2024-08-20T14:30:25"
+  },
+  "serverInfo": {
+    "processedAt": "2024-08-20T14:30:25",
+    "guid": "srv-b2c3d4e5-f6g7-8901-bcde-fg2345678901",
+    "version": "2.0"
+  }
+}
+
+// ========================================
+
+// GET Template Variables for Search and Pagination
+{
+  "routeId": "get_template_variables_demo",
+  "description": "GET endpoint demonstrating search and pagination templates",
+  "requestConfig": {
+    "httpMethod": "GET",
+    "urlPattern": "/api/search/{collection}",
+    "collection": "searchable_data",
+    "storageStrategy": "collection_file",
+    "requiredPathParams": ["collection"],
+    "optionalQueryParams": ["q", "offset", "limit", "category"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "searchResults": "{{search_results}}",
+      "filteredData": "{{filtered_results}}",
+      "paginatedData": "{{paginated_results}}",
+      "paginatedFiltered": "{{paginated_filtered_results}}",
+      "counts": {
+        "total": "{{total_count}}",
+        "returned": "{{returned_count}}"
+      },
+      "pagination": {
+        "hasMore": "{{has_more_results}}",
+        "hasNext": "{{has_next_page}}",
+        "hasPrevious": "{{has_previous_page}}"
+      },
+      "request": {
+        "collection": "{{path.collection}}",
+        "searchQuery": "{{query.q}}",
+        "category": "{{query.category}}",
+        "offset": "{{query.offset}}",
+        "limit": "{{query.limit}}"
+      }
+    },
+    "additionalFields": {
+      "metadata": {
+        "searchId": "{{generated_guid}}",
+        "timestamp": "{{current_timestamp}}"
+      }
+    },
+    "delayMs": 250
+  }
+}
+
+// Example Search Request:
+GET /api/dynamic/search/products?q=wireless&category=electronics&offset=10&limit=5
+
+// Expected Response:
+HTTP 200 OK
+{
+  "searchResults": [
+    {
+      "id": "11",
+      "name": "Wireless Mouse Pro",
+      "category": "electronics",
+      "price": 79.99
+    },
+    {
+      "id": "12",
+      "name": "Wireless Keyboard",
+      "category": "electronics",
+      "price": 129.99
+    },
+    {
+      "id": "13",
+      "name": "Wireless Charger",
+      "category": "electronics",
+      "price": 39.99
+    },
+    {
+      "id": "14",
+      "name": "Wireless Speakers",
+      "category": "electronics",
+      "price": 199.99
+    },
+    {
+      "id": "15",
+      "name": "Wireless Earbuds",
+      "category": "electronics",
+      "price": 149.99
+    }
+  ],
+  "filteredData": [
+    {
+      "id": "11",
+      "name": "Wireless Mouse Pro",
+      "category": "electronics",
+      "price": 79.99
+    },
+    {
+      "id": "12",
+      "name": "Wireless Keyboard",
+      "category": "electronics",
+      "price": 129.99
+    }
+  ],
+  "paginatedData": [
+    {
+      "id": "11",
+      "name": "Wireless Mouse Pro",
+      "category": "electronics",
+      "price": 79.99
+    },
+    {
+      "id": "12",
+      "name": "Wireless Keyboard",
+      "category": "electronics",
+      "price": 129.99
+    },
+    {
+      "id": "13",
+      "name": "Wireless Charger",
+      "category": "electronics",
+      "price": 39.99
+    },
+    {
+      "id": "14",
+      "name": "Wireless Speakers",
+      "category": "electronics",
+      "price": 199.99
+    },
+    {
+      "id": "15",
+      "name": "Wireless Earbuds",
+      "category": "electronics",
+      "price": 149.99
+    }
+  ],
+  "paginatedFiltered": [
+    {
+      "id": "11",
+      "name": "Wireless Mouse Pro",
+      "category": "electronics",
+      "price": 79.99
+    },
+    {
+      "id": "12",
+      "name": "Wireless Keyboard",
+      "category": "electronics",
+      "price": 129.99
+    }
+  ],
+  "counts": {
+    "total": 25,
+    "returned": 5
+  },
+  "pagination": {
+    "hasMore": true,
+    "hasNext": true,
+    "hasPrevious": true
+  },
+  "request": {
+    "collection": "products",
+    "searchQuery": "wireless",
+    "category": "electronics",
+    "offset": "10",
+    "limit": "5"
+  },
+  "metadata": {
+    "searchId": "search-c3d4e5f6-g7h8-9012-cdef-gh3456789012",
+    "timestamp": "2024-08-20T14:30:25"
+  }
+}
+
+// ========================================
+
+// PUT Template Variables for Updates
+{
+  "routeId": "put_template_variables_demo",
+  "description": "PUT endpoint demonstrating update templates",
+  "requestConfig": {
+    "httpMethod": "PUT",
+    "urlPattern": "/api/profiles/{userId}",
+    "collection": "user_profiles",
+    "storageStrategy": "individual_file",
+    "requiredPathParams": ["userId"],
+    "requiredBodyParams": ["name"],
+    "optionalBodyParams": ["bio", "preferences"]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "profile": "{{updated_object}}",
+      "previous": "{{found_user}}",
+      "changes": {
+        "userId": "{{path.userId}}",
+        "updatedFields": "{{request_body}}",
+        "timestamp": "{{current_timestamp}}"
+      }
+    },
+    "additionalFields": {
+      "operation": "update",
+      "version": "{{incremented_version}}",
+      "updateId": "{{generated_guid}}"
+    },
+    "customHeaders": {
+      "X-Update-ID": "{{generated_guid}}",
+      "X-User-ID": "{{path.userId}}",
+      "X-Updated-At": "{{current_timestamp}}"
+    },
+    "delayMs": 300
+  }
+}
+
+// Example PUT Request:
+PUT /api/dynamic/profiles/user123
+{
+  "name": "John Doe Updated",
+  "bio": "Senior Software Engineer with 7+ years experience",
+  "preferences": {
+    "theme": "dark",
+    "notifications": true
+  }
+}
+
+// Expected Response:
+HTTP 200 OK
+X-Update-ID: upd-d4e5f6g7-h8i9-0123-defg-hi4567890123
+X-User-ID: user123
+X-Updated-At: 2024-08-20T14:30:25
+{
+  "profile": {
+    "id": "user123",
+    "name": "John Doe Updated",
+    "bio": "Senior Software Engineer with 7+ years experience",
+    "preferences": {
+      "theme": "dark",
+      "notifications": true
+    },
+    "updatedAt": "2024-08-20T14:30:25"
+  },
+  "previous": {
+    "id": "user123",
+    "name": "John Doe",
+    "bio": "Software Engineer with 5+ years experience",
+    "preferences": {
+      "theme": "light",
+      "notifications": false
+    },
+    "createdAt": "2024-01-15T10:30:00"
+  },
+  "changes": {
+    "userId": "user123",
+    "updatedFields": {
+      "name": "John Doe Updated",
+      "bio": "Senior Software Engineer with 7+ years experience",
+      "preferences": {
+        "theme": "dark",
+        "notifications": true
+      }
+    },
+    "timestamp": "2024-08-20T14:30:25"
+  },
+  "operation": "update",
+  "version": "2.1",
+  "updateId": "upd-d4e5f6g7-h8i9-0123-defg-hi4567890123"
+}
+
+
+
+
+
+
+
+      // ========================================
+// CHUNK 9: PUT, PATCH, DELETE EXAMPLES
+// ========================================
+
+// PUT with Nested Validation and Response Transformation
+{
+  "routeId": "put_organization_structure",
+  "description": "Update organization with nested department structure",
+  "requestConfig": {
+    "httpMethod": "PUT",
+    "urlPattern": "/api/organizations/{id}",
+    "collection": "organizations",
+    "storageStrategy": "individual_file",
+    "requiredPathParams": ["id"],
+    "requiredBodyParams": [
+      "name",
+      "departments[].name",
+      "departments[].manager.employeeId"
+    ],
+    "optionalBodyParams": [
+      "departments[].budget.allocated",
+      "departments[].employees[].name"
+    ],
+    "fieldRules": [
+      {
+        "fieldName": "departments[].manager.employeeId",
+        "regexPattern": "^EMP[0-9]{5}$",
+        "statusCode": 422,
+        "message": "Employee ID must be EMP followed by 5 digits",
+        "responseBody": {
+          "error": "INVALID_EMPLOYEE_ID",
+          "field": "departments[].manager.employeeId",
+          "format": "EMP12345"
+        }
+      },
+      {
+        "fieldName": "departments[].budget.allocated",
+        "regexPattern": "^[0-9]+(\\.00)?$",
+        "statusCode": 422,
+        "message": "Budget must be a whole number or with .00",
+        "responseBody": {
+          "error": "INVALID_BUDGET_FORMAT",
+          "field": "departments[].budget.allocated"
+        }
+      }
+    ]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "organization": "{{updated_object}}",
+      "message": "Organization updated successfully"
+    },
+    "fieldsToExclude": [
+      "departments[].budget.internal",
+      "departments[].employees[].salary"
+    ],
+    "additionalFields": {
+      "updatedAt": "{{current_timestamp}}",
+      "version": "2.1"
+    },
+    "delayMs": 400
+  }
+}
+
+// Example PUT Request:
+PUT /api/dynamic/organizations/org-123
+{
+  "name": "Tech Corp Inc",
+  "departments": [
+    {
+      "name": "Engineering",
+      "manager": {
+        "employeeId": "EMP12345",
+        "name": "John Doe"
+      },
+      "budget": {
+        "allocated": 500000.00,
+        "internal": "sensitive_budget_data"
+      },
+      "employees": [
+        {
+          "name": "Alice Johnson",
+          "role": "Senior Developer",
+          "salary": 120000
+        },
+        {
+          "name": "Bob Smith",
+          "role": "DevOps Engineer", 
+          "salary": 110000
+        }
+      ]
+    },
+    {
+      "name": "Marketing",
+      "manager": {
+        "employeeId": "EMP67890",
+        "name": "Jane Wilson"
+      },
+      "budget": {
+        "allocated": 250000.00
+      }
+    }
+  ]
+}
+
+// Expected Response:
+HTTP 200 OK
+{
+  "organization": {
+    "id": "org-123",
+    "name": "Tech Corp Inc",
+    "departments": [
+      {
+        "name": "Engineering",
+        "manager": {
+          "employeeId": "EMP12345",
+          "name": "John Doe"
+        },
+        "budget": {
+          "allocated": 500000.00
+          // "internal" excluded
+        },
+        "employees": [
+          {
+            "name": "Alice Johnson",
+            "role": "Senior Developer"
+            // "salary" excluded
+          },
+          {
+            "name": "Bob Smith",
+            "role": "DevOps Engineer"
+            // "salary" excluded
+          }
+        ]
+      },
+      {
+        "name": "Marketing",
+        "manager": {
+          "employeeId": "EMP67890",
+          "name": "Jane Wilson"
+        },
+        "budget": {
+          "allocated": 250000.00
+        }
+      }
+    ],
+    "updatedAt": "2024-08-20T14:30:25"
+  },
+  "message": "Organization updated successfully",
+  "updatedAt": "2024-08-20T14:30:25",
+  "version": "2.1"
+}
+
+// Example PUT Validation Error:
+PUT /api/dynamic/organizations/org-123
+{
+  "name": "Tech Corp Inc",
+  "departments": [
+    {
+      "name": "Engineering",
+      "manager": {
+        "employeeId": "INVALID123",  // Invalid format
+        "name": "John Doe"
+      }
+    }
+  ]
+}
+
+// Expected Error Response:
+HTTP 422 Unprocessable Entity
+{
+  "error": "INVALID_EMPLOYEE_ID",
+  "field": "departments[].manager.employeeId",
+  "format": "EMP12345"
+}
+
+// ========================================
+
+// PATCH with Partial Updates
+{
+  "routeId": "patch_user_profile",
+  "description": "PATCH user profile with partial updates",
+  "requestConfig": {
+    "httpMethod": "PATCH",
+    "urlPattern": "/api/users/{id}/profile",
+    "collection": "users",
+    "storageStrategy": "collection_file",
+    "requiredPathParams": ["id"],
+    "optionalBodyParams": ["name", "bio", "preferences.theme", "preferences.notifications"],
+    "fieldRules": [
+      {
+        "fieldName": "bio",
+        "regexPattern": "^.{0,500}$",
+        "statusCode": 422,
+        "message": "Bio cannot exceed 500 characters",
+        "responseBody": {
+          "error": "BIO_TOO_LONG",
+          "field": "bio",
+          "maxLength": 500
+        }
+      }
+    ]
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "user": "{{updated_object}}",
+      "changes": "{{request_body}}",
+      "message": "Profile updated successfully"
+    },
+    "fieldsToExclude": ["password", "internalNotes"],
+    "additionalFields": {
+      "lastModified": "{{current_timestamp}}",
+      "patchId": "{{generated_guid}}"
+    },
+    "customHeaders": {
+      "X-Last-Modified": "{{current_timestamp}}",
+      "X-Patch-ID": "{{generated_guid}}"
+    },
+    "delayMs": 200
+  }
+}
+
+// Example PATCH Request (partial update):
+PATCH /api/dynamic/users/user456/profile
+{
+  "bio": "Updated bio with new information",
+  "preferences": {
+    "theme": "dark"
+  }
+}
+
+// Expected Response:
+HTTP 200 OK
+X-Last-Modified: 2024-08-20T14:30:25
+X-Patch-ID: patch-e5f6g7h8-i9j0-1234-efgh-ij5678901234
+{
+  "user": {
+    "id": "user456",
+    "name": "Jane Smith",  // unchanged
+    "email": "jane.smith@example.com",  // unchanged
+    "bio": "Updated bio with new information",  // updated
+    "preferences": {
+      "theme": "dark",  // updated
+      "notifications": true  // unchanged from existing
+    },
+    "updatedAt": "2024-08-20T14:30:25"
+  },
+  "changes": {
+    "bio": "Updated bio with new information",
+    "preferences": {
+      "theme": "dark"
+    }
+  },
+  "message": "Profile updated successfully",
+  "lastModified": "2024-08-20T14:30:25",
+  "patchId": "patch-e5f6g7h8-i9j0-1234-efgh-ij5678901234"
+}
+
+// ========================================
+
+// DELETE with Custom Response and Conditional Logic
+{
+  "routeId": "delete_user_account",
+  "description": "Delete user account with custom response",
+  "requestConfig": {
+    "httpMethod": "DELETE",
+    "urlPattern": "/api/users/{id}",
+    "collection": "users",
+    "storageStrategy": "individual_file",
+    "requiredPathParams": ["id"],
+    "customHeaders": {
+      "Authorization": "Bearer token"
+    }
+  },
+  "responseConfig": {
+    "statusCode": 200,
+    "responseBody": {
+      "message": "User account deleted successfully",
+      "deletedUserId": "{{path.id}}",
+      "deletedAt": "{{current_timestamp}}",
+      "success": true
+    },
+    "conditionalResponses": [
+      {
+        "condition": "header:X-Soft-Delete=true",
+        "statusCode": 200,
+        "message": "User soft deleted",
+        "responseBody": {
+          "message": "User account soft deleted",
+          "userId": "{{path.id}}",
+          "softDeleted": true,
+          "canRestore": true,
+          "deletedAt": "{{current_timestamp}}"
+        }
+      },
+      {
+        "condition": "header:X-Archive=true",
+        "statusCode": 202,
+        "message": "User archived",
+        "responseBody": {
+          "message": "User account archived for compliance",
+          "userId": "{{path.id}}",
+          "archived": true,
+          "retentionPeriod": "7 years",
+          "archivedAt": "{{current_timestamp}}"
+        }
+      }
+    ],
+    "customHeaders": {
+      "X-Operation": "DELETE",
+      "X-Resource-Id": "{{path.id}}"
+    },
+    "delayMs": 150
+  }
+}
+
+// Example Regular DELETE Request:
+DELETE /api/dynamic/users/789
+Authorization: Bearer admin-token
+
+// Expected Response:
+HTTP 200 OK
+X-Operation: DELETE
+X-Resource-Id: 789
+{
+  "message": "User account deleted successfully",
+  "deletedUserId": "789",
+  "deletedAt": "2024-08-20T14:30:25",
+  "success": true
+}
+
+// Example Soft Delete Request:
+DELETE /api/dynamic/users/789
+Authorization: Bearer admin-token
+X-Soft-Delete: true
+
+// Expected Soft Delete Response:
+HTTP 200 OK
+X-Operation: DELETE
+X-Resource-Id: 789
+{
+  "message": "User account soft deleted", 
+  "userId": "789",
+  "softDeleted": true,
+  "canRestore": true,
+  "deletedAt": "2024-08-20T14:30:25"
+}
+
+// Example Archive Request:
+DELETE /api/dynamic/users/789
+Authorization: Bearer compliance-token
+X-Archive: true
+
+// Expected Archive Response:
+HTTP 202 Accepted
+X-Operation: DELETE
+X-Resource-Id: 789
+{
+  "message": "User account archived for compliance",
+  "userId": "789",
+  "archived": true,
+  "retentionPeriod": "7 years",
+  "archivedAt": "2024-08-20T14:30:25"
+}
+
+// Example DELETE Not Found:
+DELETE /api/dynamic/users/999
+Authorization: Bearer admin-token
+
+// Expected Error Response:
+HTTP 404 Not Found
+{
+  "statusCode": 404,
+  "message": "Item not found: 999",
+  "timestamp": "2024-08-20T14:30:25"
+}
+
+
+
+
+
+// ========================================
+// CHUNK 10: REAL-WORLD E-COMMERCE EXAMPLE
+// ========================================
+
+// Complete E-commerce Order Management System
+{
+  "routeId": "post_ecommerce_order",
+  "description": "Complete e-commerce order creation with all features",
+  "requestConfig": {
+    "httpMethod": "POST",
+    "urlPattern": "/api/orders",
+    "collection": "orders",
+    "storageStrategy": "individual_file",
+    "requiredBodyParams": [
+      "customer.email",
+      "customer.name",
+      "items[].productId",
+      "items[].quantity",
+      "shipping.address.street",
+      "shipping.address.city",
+      "payment.method"
+    ],
+    "optionalBodyParams": [
+      "customer.phone",
+      "items[].customization.text",
+      "shipping.instructions",
+      "payment.cardLast4",
+      "promotions[].code"
+    ],
+    "customHeaders": {
+      "Authorization": "Bearer token",
+      "X-Client-Version": "required"
+    },
+    "fieldRules": [
+      {
+        "fieldName": "customer.email",
+        "regexPattern": "^[\\w\\.-]+@[\\w\\.-]+\\.[a-zA-Z]{2,}$",
+        "statusCode": 422,
+        "message": "Invalid customer email format",
+        "responseBody": {
+          "error": "INVALID_CUSTOMER_EMAIL",
+          "field": "customer.email"
+        }
+      },
+      {
+        "fieldName": "items[].quantity",
+        "regexPattern": "^[

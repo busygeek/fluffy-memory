@@ -1,5 +1,5 @@
 // ========================================
-// SIMPLE SOLUTION: Enhanced Template Processor
+// FIX: Return JSON Objects Instead of Text Strings
 // ========================================
 
 @Service
@@ -10,17 +10,13 @@ public class TemplateProcessorService {
     private final ObjectMapper objectMapper;
     private static final Pattern TEMPLATE_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
     
-    // Simple map to store generated values during processing
     private Map<String, String> currentGeneratedValues = new HashMap<>();
     
     public Object processTemplate(Object template, TemplateContext context) {
-        // Clear previous generated values
         currentGeneratedValues.clear();
         
-        // Process template as before
         Object result = processTemplateInternal(template, context);
         
-        // Save generated values to the record if it's a Map
         if (context.getCreatedObject() instanceof Map) {
             Map<String, Object> record = (Map<String, Object>) context.getCreatedObject();
             saveGeneratedValuesToRecord(record);
@@ -43,9 +39,10 @@ public class TemplateProcessorService {
         return template;
     }
     
-    private String resolveVariable(String variableName, TemplateContext context) {
+    // FIXED: Return objects directly instead of serializing to strings
+    private Object resolveVariable(String variableName, TemplateContext context) {
         return switch (variableName) {
-            // Generate and store these values
+            // Generate and store these specific values
             case "created_record_guid", "generated_guid" -> {
                 String guid = UUID.randomUUID().toString();
                 currentGeneratedValues.put(variableName, guid);
@@ -56,19 +53,30 @@ public class TemplateProcessorService {
                 currentGeneratedValues.put(variableName, sixDigitId);
                 yield sixDigitId;
             }
-            case "generated_5digit_alphanumeric" -> {
-                String alphanumeric = generateAlphanumeric(5);
-                currentGeneratedValues.put(variableName, alphanumeric);
-                yield alphanumeric;
-            }
             
-            // All other template variables (unchanged)
+            // Timestamps (strings)
             case "current_timestamp" -> LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
             case "current_date" -> LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
             case "timestamp" -> String.valueOf(System.currentTimeMillis());
-            case "found_user" -> serializeToString(context.getFoundObject());
-            case "request_body" -> serializeToString(context.getRequestBody());
-            // ... all other existing cases unchanged
+            
+            // FIXED: Return actual objects, not serialized strings
+            case "created_object_with_extras" -> context.getCreatedObject(); // Return object directly
+            case "filtered_results" -> context.getFilteredResults(); // Return list directly
+            case "paginated_results" -> context.getPaginatedResults(); // Return list directly
+            case "paginated_filtered_results" -> context.getPaginatedFilteredResults(); // Return list directly
+            case "search_results" -> context.getSearchResults(); // Return list directly
+            case "found_user" -> context.getFoundObject(); // Return object directly
+            case "updated_profile" -> context.getUpdatedObject(); // Return object directly
+            case "request_body" -> context.getRequestBody(); // Return object directly
+            
+            // Numbers (return as numbers, not strings)
+            case "total_count" -> context.getTotalCount(); // Return int directly
+            case "returned_count" -> context.getReturnedCount(); // Return int directly
+            
+            // Booleans (return as booleans, not strings)
+            case "has_more_results" -> context.isHasMoreResults(); // Return boolean directly
+            case "has_next_page" -> context.isHasNextPage(); // Return boolean directly
+            case "has_previous_page" -> context.isHasPreviousPage(); // Return boolean directly
             
             default -> {
                 if (variableName.startsWith("query.")) {
@@ -88,116 +96,140 @@ public class TemplateProcessorService {
         };
     }
     
-    // Simple method to save generated values to record
+    // UPDATED: Handle both string templates and object replacements
+    private Object processStringTemplate(String template, TemplateContext context) {
+        if (template == null || !template.contains("{{")) {
+            return template;
+        }
+        
+        // Check if the entire string is just one template variable
+        Matcher singleVarMatcher = Pattern.compile("^\\{\\{([^}]+)\\}\\}$").matcher(template);
+        if (singleVarMatcher.matches()) {
+            String variableName = singleVarMatcher.group(1).trim();
+            Object resolved = resolveVariable(variableName, context);
+            
+            // If it's an object/list/number/boolean, return it directly (not as string)
+            if (resolved instanceof Map || resolved instanceof List || 
+                resolved instanceof Number || resolved instanceof Boolean) {
+                return resolved;
+            }
+            
+            // Otherwise return as string
+            return String.valueOf(resolved);
+        }
+        
+        // For templates with multiple variables or mixed content, process as string
+        Matcher matcher = TEMPLATE_PATTERN.matcher(template);
+        StringBuffer result = new StringBuffer();
+        
+        while (matcher.find()) {
+            String variableName = matcher.group(1).trim();
+            Object resolved = resolveVariable(variableName, context);
+            String replacement = String.valueOf(resolved);
+            matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
+        }
+        matcher.appendTail(result);
+        
+        return result.toString();
+    }
+    
+    private Map<String, Object> processMapTemplate(Map<String, Object> template, TemplateContext context) {
+        Map<String, Object> result = new HashMap<>();
+        
+        for (Map.Entry<String, Object> entry : template.entrySet()) {
+            String key = entry.getKey();
+            Object value = entry.getValue();
+            
+            // Process key (always as string)
+            String processedKey = String.valueOf(processStringTemplate(key, context));
+            
+            // Process value (can be object, string, etc.)
+            Object processedValue = processTemplateInternal(value, context);
+            
+            result.put(processedKey, processedValue);
+        }
+        
+        return result;
+    }
+    
+    private List<Object> processListTemplate(List<Object> template, TemplateContext context) {
+        List<Object> result = new ArrayList<>();
+        
+        for (Object item : template) {
+            result.add(processTemplateInternal(item, context));
+        }
+        
+        return result;
+    }
+    
     private void saveGeneratedValuesToRecord(Map<String, Object> record) {
         for (Map.Entry<String, String> entry : currentGeneratedValues.entrySet()) {
             String templateVar = entry.getKey();
             String generatedValue = entry.getValue();
             
-            // Save with simple field names
             String fieldName = switch (templateVar) {
                 case "created_record_guid" -> "recordId";
                 case "generated_guid" -> "guid";
                 case "generated_6_digit_id" -> "contactId";
-                case "generated_5digit_alphanumeric" -> "alphanumericId";
-                default -> templateVar.replace("generated_", "").replace("created_record_", "");
+                default -> templateVar;
             };
             
             record.put(fieldName, generatedValue);
             log.debug("Saved to record: {} = {}", fieldName, generatedValue);
         }
     }
-    
-    // Helper method for alphanumeric generation
-    private String generateAlphanumeric(int length) {
-        String chars = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789";
-        Random random = new Random();
-        StringBuilder result = new StringBuilder();
-        for (int i = 0; i < length; i++) {
-            result.append(chars.charAt(random.nextInt(chars.length())));
-        }
-        return result.toString();
-    }
-    
-    // ... rest of existing methods unchanged (processStringTemplate, processMapTemplate, etc.)
 }
 
 // ========================================
-// EXAMPLE USAGE
+// EXAMPLES - BEFORE AND AFTER THE FIX
 // ========================================
 
 /*
-Route Configuration:
+BEFORE (returned as text string):
 {
-  "routeId": "post_contact_simple",
-  "requestConfig": {
-    "httpMethod": "POST",
-    "urlPattern": "/api/contacts",
-    "collection": "contacts",
-    "requiredBodyParams": ["firstName", "lastName", "email"]
-  },
-  "responseConfig": {
-    "statusCode": 201,
-    "responseBody": {
-      "responseObject": {
-        "contactId": "{{generated_6_digit_id}}",
-        "recordId": "{{created_record_guid}}", 
-        "additionalId": "{{generated_guid}}",
-        "someNewIdCombo": "{{generated_5digit_alphanumeric}}",
-        "success": true
-      }
-    }
-  }
+  "responseBody": "{{created_object_with_extras}}"
 }
 
-POST Request:
+Response:
+"responseBody": "{\"id\":\"123\",\"name\":\"John\",\"email\":\"john@example.com\"}"  // TEXT STRING!
+
+---
+
+AFTER (returns as JSON object):
 {
-  "firstName": "John",
-  "lastName": "Doe",
+  "responseBody": "{{created_object_with_extras}}"
+}
+
+Response:
+"responseBody": {                           // JSON OBJECT!
+  "id": "123",
+  "name": "John", 
   "email": "john@example.com"
 }
 
-What gets SAVED in collection:
+---
+
+MIXED TEMPLATES (still work as strings):
 {
-  "id": "auto-generated-uuid-by-system",
-  "firstName": "John", 
-  "lastName": "Doe",
-  "email": "john@example.com",
-  "createdAt": "2024-08-20T14:30:25",
-  
-  // AUTOMATICALLY ADDED generated values:
-  "recordId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",     // from {{created_record_guid}}
-  "contactId": "123456",                                    // from {{generated_6_digit_id}}
-  "guid": "b2c3d4e5-f6g7-8901-bcde-fg2345678901",         // from {{generated_guid}}
-  "alphanumericId": "A3B9Z"                                // from {{generated_5digit_alphanumeric}}
+  "message": "User {{found_user.name}} has ID {{path.id}}"
 }
 
-Response returned:
+Response:
+"message": "User John Doe has ID 123"      // TEXT STRING (as expected)
+
+---
+
+NUMBERS AND BOOLEANS (now proper types):
 {
-  "responseObject": {
-    "contactId": "123456",                                  // same value as saved
-    "recordId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",   // same value as saved
-    "additionalId": "b2c3d4e5-f6g7-8901-bcde-fg2345678901", // same value as saved
-    "someNewIdCombo": "A3B9Z",                             // same value as saved
-    "success": true
-  }
+  "count": "{{total_count}}",
+  "hasMore": "{{has_more_results}}"
 }
+
+BEFORE:
+"count": "25",                             // TEXT STRING
+"hasMore": "true"                          // TEXT STRING
+
+AFTER:
+"count": 25,                               // NUMBER
+"hasMore": true                            // BOOLEAN
 */
-
-// ========================================
-// ADDING NEW GENERATORS IS EASY
-// ========================================
-
-// Just add new cases to resolveVariable():
-case "generated_8digit_hex" -> {
-    String hex = String.format("%08X", new Random().nextInt());
-    currentGeneratedValues.put(variableName, hex);
-    yield hex;
-}
-case "generated_uuid_short" -> {
-    String shortUuid = UUID.randomUUID().toString().substring(0, 8);
-    currentGeneratedValues.put(variableName, shortUuid);
-    yield shortUuid;
-}
-
-// And they'll automatically be saved to records when used in templates!

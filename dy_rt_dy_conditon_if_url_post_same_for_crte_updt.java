@@ -19,7 +19,7 @@ public class RequestConfig {
     private Map<String, String> customHeaders;
     private Map<String, String> paramMappings;
     
-    // NEW FIELD for v11
+    // NEW FIELD for update detection
     private String updateCondition;
 }
 
@@ -40,12 +40,12 @@ public class FieldRule {
     private String message;
     private Object responseBody;
     
-    // NEW FIELD for v11
+    // NEW FIELD for operation-specific rules
     private List<String> applyToOperations; // ["create", "update", "both"]
 }
 
 // ========================================
-// 3. UPDATE EnhancedDynamicRouteService.java - MODIFY VALIDATION METHOD
+// 3. UPDATE EnhancedDynamicRouteService.java - VALIDATION METHOD
 // ========================================
 
 package com.mockapi.service;
@@ -64,7 +64,7 @@ public class EnhancedDynamicRouteService {
                                           HttpHeaders headers, Map<String, String> queryParams) {
         RequestConfig reqConfig = route.getRequestConfig();
         
-        // Determine operation type using conditional evaluation (GENERIC)
+        // Determine operation type using conditional evaluation
         boolean isUpdateOperation = false;
         if (reqConfig.getUpdateCondition() != null) {
             isUpdateOperation = evaluateCondition(reqConfig.getUpdateCondition(), 
@@ -193,7 +193,51 @@ public class EnhancedDynamicRouteService {
             return conditionalResponse;
         }
         
-        // ... rest of existing buildResponse method unchanged ...
+        // Use configured status code and response body
+        int statusCode = respConfig.getStatusCode() > 0 ? respConfig.getStatusCode() : 200;
+        Object responseBody = respConfig.getResponseBody() != null ? respConfig.getResponseBody() : data;
+        
+        // STEP A: Process regular templates first ({{variable_name}})
+        responseBody = templateProcessor.processTemplate(responseBody, context);
+        
+        // STEP B: Process flexible dynamic patterns anywhere in response
+        DynamicFieldContext dynamicContext = DynamicFieldContext.builder()
+                .requestBody(requestBody)
+                .queryParams(queryParams != null ? queryParams : new HashMap<>())
+                .pathParams(pathParams != null ? pathParams : new HashMap<>())
+                .headers(convertHttpHeadersToMap(requestHeaders))
+                .foundObject(context.getFoundObject())
+                .results(context.getFilteredResults())
+                .build();
+        
+        responseBody = flexibleProcessor.processDynamicPatterns(responseBody, dynamicContext);
+        
+        // Apply response transformations if needed
+        if (respConfig.getResponseBody() == null && data instanceof Map) {
+            responseBody = transformResponseData((Map<String, Object>) data, respConfig);
+        }
+        
+        // Add additional fields
+        if (respConfig.getAdditionalFields() != null && responseBody instanceof Map) {
+            Map<String, Object> bodyMap = (Map<String, Object>) responseBody;
+            Map<String, Object> processedAdditionalFields = (Map<String, Object>) templateProcessor.processTemplate(respConfig.getAdditionalFields(), context);
+            
+            // Also process additional fields with flexible processor
+            processedAdditionalFields = (Map<String, Object>) flexibleProcessor.processDynamicPatterns(processedAdditionalFields, dynamicContext);
+            
+            bodyMap.putAll(processedAdditionalFields);
+        }
+        
+        // Process templates in custom headers
+        Map<String, String> processedHeaders = new HashMap<>();
+        if (respConfig.getCustomHeaders() != null) {
+            respConfig.getCustomHeaders().forEach((key, value) -> {
+                String processedValue = (String) templateProcessor.processTemplate(value, context);
+                // Also process headers with flexible processor
+                processedValue = (String) flexibleProcessor.processDynamicPatterns(processedValue, dynamicContext);
+                processedHeaders.put(key, processedValue);
+            });
+        }
         
         return ResponseData.builder()
                 .statusCode(statusCode)
@@ -293,12 +337,106 @@ public class EnhancedDynamicRouteService {
 }
 
 // ========================================
-// 4. CONFIGURATION JSON FOR YOUR USE CASE
+// 4. UPDATE EnhancedDynamicEndpointController.java - HANDLE POST REQUEST
+// ========================================
+
+package com.mockapi.controller;
+
+// ... existing imports ...
+
+@RestController
+@RequestMapping("/api/dynamic")
+@RequiredArgsConstructor
+@Slf4j
+public class EnhancedDynamicEndpointController {
+    
+    // ... existing fields ...
+    
+    // UPDATED METHOD: Fix handlePostRequest for proper update handling
+    private Object handlePostRequest(RouteConfig route, Map<String, String> pathVars, 
+                                    Map<String, String> queryParams, Map<String, Object> requestBody,
+                                    HttpHeaders headers) {
+        String collection = route.getRequestConfig().getCollection();
+        
+        if (requestBody == null) {
+            requestBody = new HashMap<>();
+        }
+        
+        // Determine if this is an update operation using the same logic as validation
+        boolean isUpdateOperation = false;
+        if (route.getRequestConfig().getUpdateCondition() != null) {
+            isUpdateOperation = dynamicRouteService.evaluateCondition(
+                route.getRequestConfig().getUpdateCondition(), 
+                "", queryParams != null ? queryParams : new HashMap<>(), headers, requestBody
+            );
+        }
+        
+        if (isUpdateOperation) {
+            // UPDATE OPERATION - fetch existing record and merge
+            String providedGuid = String.valueOf(requestBody.get("guid"));
+            
+            // Try to fetch existing record
+            Object existingRecord = getItemFromCollection(collection, providedGuid, route.getRequestConfig().getStorageStrategy());
+            
+            Map<String, Object> recordToSave;
+            if (existingRecord != null) {
+                // Merge with existing record
+                recordToSave = new HashMap<>((Map<String, Object>) existingRecord);
+                recordToSave.putAll(requestBody); // Override with new values
+                recordToSave.put("updatedAt", new Date());
+                log.debug("Updating existing record with GUID: {}", providedGuid);
+            } else {
+                // Create new record with provided GUID (record doesn't exist yet)
+                recordToSave = new HashMap<>(requestBody);
+                recordToSave.put("id", providedGuid);
+                recordToSave.put("createdAt", new Date());
+                log.debug("Creating new record with provided GUID: {}", providedGuid);
+            }
+            
+            // Apply parameter mappings
+            applyParameterMappings(route.getRequestConfig(), pathVars, queryParams, recordToSave);
+            
+            // Save using provided GUID as record ID
+            saveRecordToCollection(route, providedGuid, recordToSave);
+            
+            return recordToSave;
+            
+        } else {
+            // CREATE OPERATION - generate new ID
+            if (!requestBody.containsKey("id")) {
+                requestBody.put("id", UUID.randomUUID().toString());
+            }
+            
+            requestBody.put("createdAt", new Date());
+            applyParameterMappings(route.getRequestConfig(), pathVars, queryParams, requestBody);
+            
+            // Save new record
+            String itemId = String.valueOf(requestBody.get("id"));
+            saveRecordToCollection(route, itemId, requestBody);
+            log.debug("Created new record with generated ID: {}", itemId);
+            
+            return requestBody;
+        }
+    }
+    
+    // Make evaluateCondition method public so controller can access it
+    // Add this method to EnhancedDynamicRouteService:
+    public boolean evaluateCondition(String condition, String requestPath, 
+                                   Map<String, String> queryParams, HttpHeaders requestHeaders,
+                                   Object requestBody) {
+        return evaluateCondition(condition, requestPath, queryParams, requestHeaders, requestBody);
+    }
+    
+    // ... rest of existing controller methods unchanged ...
+}
+
+// ========================================
+// 5. CONFIGURATION JSON FOR YOUR USE CASE
 // ========================================
 
 /*
 {
-  "routeId": "call_data_v11",
+  "routeId": "call_data_final",
   "enabled": true,
   "requestConfig": {
     "httpMethod": "POST",
@@ -348,55 +486,35 @@ public class EnhancedDynamicRouteService {
     }
   }
 }
-
-// EXAMPLES OF MULTIPLE CONDITIONS:
-
-// Example 1: Update requires both id AND version
-{
-  "updateCondition": "body_has_field:id AND body_has_field:version"
-}
-
-// Example 2: Update requires either guid OR userId  
-{
-  "updateCondition": "body_has_field:guid OR body_has_field:userId"
-}
-
-// Example 3: Complex condition with multiple requirements
-{
-  "updateCondition": "body_has_field:orderId AND body_has_field:customerId AND body_field_empty:status"
-}
-
-// Example 4: Different API examples
-{
-  "updateCondition": "body_has_field:userId",  // User API
-  "updateCondition": "body_has_field:productId",  // Product API  
-  "updateCondition": "body_has_field:orderId AND body_has_field:trackingNumber"  // Order API
-}
 */
 
 // ========================================
-// 5. SUMMARY OF ALL CHANGES FOR V11
+// SUMMARY OF ALL CHANGES FOR FINAL VERSION
 // ========================================
 
 /*
 CHANGES REQUIRED:
 
 1. RequestConfig.java:
-   - Add: private String operationDetectionCondition;
+   - Add: private String updateCondition;
 
 2. FieldRule.java:
    - Add: private List<String> applyToOperations;
 
 3. EnhancedDynamicRouteService.java:
-   - Update validateRequest() method signature and logic
+   - Update validateRequest() method with field-rules-first validation
    - Update buildResponse() method to pass requestBody to conditional checks
    - Update checkConditionalResponses() method signature
    - Update evaluateCondition() method signature and add body conditions
+   - Make evaluateCondition() public for controller access
 
-BENEFITS:
-- Generic operation detection (no hardcoded field names)
-- Configurable field rules per operation type
-- Body-based conditional responses
-- Reusable for any API endpoint
-- Clean separation of create vs update validation
+4. EnhancedDynamicEndpointController.java:
+   - Update handlePostRequest() to properly handle updates by fetching existing records
+
+BEHAVIOR:
+- CREATE (no guid): Generates new GUID, creates new record
+- UPDATE (with guid): Fetches existing record, merges data, saves with provided GUID
+- Field validation uses specific error responses when configured
+- Body-based conditional responses work correctly
+- Validation checks field rules first, then determines required fields automatically
 */

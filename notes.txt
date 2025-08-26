@@ -1,93 +1,7 @@
-// ========================================
-// FIX: Return JSON Objects Instead of Text Strings
-// ========================================
-
-@Service
-@RequiredArgsConstructor
-@Slf4j
-public class TemplateProcessorService {
-    
-    private final ObjectMapper objectMapper;
-    private static final Pattern TEMPLATE_PATTERN = Pattern.compile("\\{\\{([^}]+)\\}\\}");
-    
-    private Map<String, String> currentGeneratedValues = new HashMap<>();
-    
-    public Object processTemplate(Object template, TemplateContext context) {
-        currentGeneratedValues.clear();
-        
-        Object result = processTemplateInternal(template, context);
-        
-        if (context.getCreatedObject() instanceof Map) {
-            Map<String, Object> record = (Map<String, Object>) context.getCreatedObject();
-            saveGeneratedValuesToRecord(record);
-        }
-        
-        return result;
-    }
-    
-    private Object processTemplateInternal(Object template, TemplateContext context) {
-        if (template == null) return null;
-        
-        if (template instanceof String) {
-            return processStringTemplate((String) template, context);
-        } else if (template instanceof Map) {
-            return processMapTemplate((Map<String, Object>) template, context);
-        } else if (template instanceof List) {
-            return processListTemplate((List<Object>) template, context);
-        }
-        
-        return template;
-    }
-    
-    // FIXED: Return objects directly instead of serializing to strings
-    private Object resolveVariable(String variableName, TemplateContext context) {
-        return switch (variableName) {
-            // Generate and store these specific values
-            case "created_record_guid", "generated_guid" -> {
-                String guid = UUID.randomUUID().toString();
-                currentGeneratedValues.put(variableName, guid);
-                yield guid;
-            }
-            case "generated_6_digit_id" -> {
-                String sixDigitId = String.format("%06d", new Random().nextInt(999999));
-                currentGeneratedValues.put(variableName, sixDigitId);
-                yield sixDigitId;
-            }
-            
-            // Timestamps (strings)
-            case "current_timestamp" -> LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE_TIME);
-            case "current_date" -> LocalDateTime.now().format(DateTimeFormatter.ISO_LOCAL_DATE);
-            case "timestamp" -> String.valueOf(System.currentTimeMillis());
-            
-            // FIXED: Return actual objects, not serialized strings
-            case "created_object_with_extras" -> context.getCreatedObject(); // Return object directly
-            case "filtered_results" -> context.getFilteredResults(); // Return list directly
-            case "paginated_results" -> context.getPaginatedResults(); // Return list directly
-            case "paginated_filtered_results" -> context.getPaginatedFilteredResults(); // Return list directly
-            case "search_results" -> context.getSearchResults(); // Return list directly
-            case "found_user" -> context.getFoundObject(); // Return object directly
-            case "updated_profile" -> context.getUpdatedObject(); // Return object directly
-            case "request_body" -> context.getRequestBody(); // Return object directly
-            
-            // Numbers (return as numbers, not strings)
-            case "total_count" -> context.getTotalCount(); // Return int directly
-            case "returned_count" -> context.getReturnedCount(); // Return int directly
-            
-            // Booleans (return as booleans, not strings)
-            case "has_more_results" -> context.isHasMoreResults(); // Return boolean directly
-            case "has_next_page" -> context.isHasNextPage(); // Return boolean directly
-            case "has_previous_page" -> context.isHasPreviousPage(); // Return boolean directly
-            
-            default -> {
-                if (variableName.startsWith("query.")) {
-                    String paramName = variableName.substring(6);
-                    yield context.getQueryParams().getOrDefault(paramName, "");
-                } else if (variableName.startsWith("path.")) {
-                    String paramName = variableName.substring(5);
-                    yield context.getPathParams().getOrDefault(paramName, "");
-                } else if (variableName.startsWith("header.")) {
-                    String headerName = variableName.substring(7);
-                    yield context.getHeaders().getOrDefault(headerName, "");
+else if (variableName.startsWith("requestbody.")) {
+                    // NEW: Handle requestbody.fieldname patterns
+                    String fieldName = variableName.substring(12);
+                    yield getValueFromRequestBody(fieldName, context);
                 } else {
                     log.warn("Unknown template variable: {}", variableName);
                     yield "{{" + variableName + "}}";
@@ -96,140 +10,38 @@ public class TemplateProcessorService {
         };
     }
     
-    // UPDATED: Handle both string templates and object replacements
-    private Object processStringTemplate(String template, TemplateContext context) {
-        if (template == null || !template.contains("{{")) {
-            return template;
+    // NEW METHOD: Extract values from request body
+    private String getValueFromRequestBody(String fieldName, TemplateContext context) {
+        if (context.getRequestBody() == null) {
+            return "";
         }
         
-        // Check if the entire string is just one template variable
-        Matcher singleVarMatcher = Pattern.compile("^\\{\\{([^}]+)\\}\\}$").matcher(template);
-        if (singleVarMatcher.matches()) {
-            String variableName = singleVarMatcher.group(1).trim();
-            Object resolved = resolveVariable(variableName, context);
-            
-            // If it's an object/list/number/boolean, return it directly (not as string)
-            if (resolved instanceof Map || resolved instanceof List || 
-                resolved instanceof Number || resolved instanceof Boolean) {
-                return resolved;
+        try {
+            if (context.getRequestBody() instanceof Map) {
+                Map<String, Object> body = (Map<String, Object>) context.getRequestBody();
+                
+                // Handle nested field paths like "user.name" or simple fields like "guid"
+                String[] pathParts = fieldName.split("\\.");
+                Object value = body;
+                
+                for (String part : pathParts) {
+                    if (value instanceof Map) {
+                        value = ((Map<String, Object>) value).get(part);
+                    } else {
+                        return "";
+                    }
+                    
+                    if (value == null) {
+                        return "";
+                    }
+                }
+                
+                return String.valueOf(value);
             }
-            
-            // Otherwise return as string
-            return String.valueOf(resolved);
+        } catch (Exception e) {
+            log.warn("Error extracting field '{}' from request body: {}", fieldName, e.getMessage());
         }
         
-        // For templates with multiple variables or mixed content, process as string
-        Matcher matcher = TEMPLATE_PATTERN.matcher(template);
-        StringBuffer result = new StringBuffer();
-        
-        while (matcher.find()) {
-            String variableName = matcher.group(1).trim();
-            Object resolved = resolveVariable(variableName, context);
-            String replacement = String.valueOf(resolved);
-            matcher.appendReplacement(result, Matcher.quoteReplacement(replacement));
-        }
-        matcher.appendTail(result);
-        
-        return result.toString();
+        return "";
     }
     
-    private Map<String, Object> processMapTemplate(Map<String, Object> template, TemplateContext context) {
-        Map<String, Object> result = new HashMap<>();
-        
-        for (Map.Entry<String, Object> entry : template.entrySet()) {
-            String key = entry.getKey();
-            Object value = entry.getValue();
-            
-            // Process key (always as string)
-            String processedKey = String.valueOf(processStringTemplate(key, context));
-            
-            // Process value (can be object, string, etc.)
-            Object processedValue = processTemplateInternal(value, context);
-            
-            result.put(processedKey, processedValue);
-        }
-        
-        return result;
-    }
-    
-    private List<Object> processListTemplate(List<Object> template, TemplateContext context) {
-        List<Object> result = new ArrayList<>();
-        
-        for (Object item : template) {
-            result.add(processTemplateInternal(item, context));
-        }
-        
-        return result;
-    }
-    
-    private void saveGeneratedValuesToRecord(Map<String, Object> record) {
-        for (Map.Entry<String, String> entry : currentGeneratedValues.entrySet()) {
-            String templateVar = entry.getKey();
-            String generatedValue = entry.getValue();
-            
-            String fieldName = switch (templateVar) {
-                case "created_record_guid" -> "recordId";
-                case "generated_guid" -> "guid";
-                case "generated_6_digit_id" -> "contactId";
-                default -> templateVar;
-            };
-            
-            record.put(fieldName, generatedValue);
-            log.debug("Saved to record: {} = {}", fieldName, generatedValue);
-        }
-    }
-}
-
-// ========================================
-// EXAMPLES - BEFORE AND AFTER THE FIX
-// ========================================
-
-/*
-BEFORE (returned as text string):
-{
-  "responseBody": "{{created_object_with_extras}}"
-}
-
-Response:
-"responseBody": "{\"id\":\"123\",\"name\":\"John\",\"email\":\"john@example.com\"}"  // TEXT STRING!
-
----
-
-AFTER (returns as JSON object):
-{
-  "responseBody": "{{created_object_with_extras}}"
-}
-
-Response:
-"responseBody": {                           // JSON OBJECT!
-  "id": "123",
-  "name": "John", 
-  "email": "john@example.com"
-}
-
----
-
-MIXED TEMPLATES (still work as strings):
-{
-  "message": "User {{found_user.name}} has ID {{path.id}}"
-}
-
-Response:
-"message": "User John Doe has ID 123"      // TEXT STRING (as expected)
-
----
-
-NUMBERS AND BOOLEANS (now proper types):
-{
-  "count": "{{total_count}}",
-  "hasMore": "{{has_more_results}}"
-}
-
-BEFORE:
-"count": "25",                             // TEXT STRING
-"hasMore": "true"                          // TEXT STRING
-
-AFTER:
-"count": 25,                               // NUMBER
-"hasMore": true                            // BOOLEAN
-*/

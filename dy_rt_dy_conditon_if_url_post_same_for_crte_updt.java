@@ -352,7 +352,7 @@ public class EnhancedDynamicEndpointController {
     
     // ... existing fields ...
     
-    // UPDATED METHOD: Fix handlePostRequest for proper update handling
+    // UPDATED METHOD: Fix handlePostRequest for proper update handling with dynamic field extraction
     private Object handlePostRequest(RouteConfig route, Map<String, String> pathVars, 
                                     Map<String, String> queryParams, Map<String, Object> requestBody,
                                     HttpHeaders headers) {
@@ -372,32 +372,46 @@ public class EnhancedDynamicEndpointController {
         }
         
         if (isUpdateOperation) {
-            // UPDATE OPERATION - fetch existing record and merge
-            String providedGuid = String.valueOf(requestBody.get("guid"));
+            // UPDATE OPERATION - extract search fields from updateCondition and search collection
+            Map<String, String> searchCriteria = extractSearchCriteriaFromCondition(
+                route.getRequestConfig().getUpdateCondition(), requestBody
+            );
             
-            // Try to fetch existing record
-            Object existingRecord = getItemFromCollection(collection, providedGuid, route.getRequestConfig().getStorageStrategy());
+            if (searchCriteria.isEmpty()) {
+                throw new MockApiException(400, "Unable to extract search criteria from updateCondition");
+            }
+            
+            // Search for existing record using the extracted criteria
+            Object existingRecord = findExistingRecord(collection, searchCriteria, route.getRequestConfig().getStorageStrategy());
             
             Map<String, Object> recordToSave;
+            String recordId;
+            
             if (existingRecord != null) {
                 // Merge with existing record
                 recordToSave = new HashMap<>((Map<String, Object>) existingRecord);
                 recordToSave.putAll(requestBody); // Override with new values
                 recordToSave.put("updatedAt", new Date());
-                log.debug("Updating existing record with GUID: {}", providedGuid);
+                recordId = String.valueOf(recordToSave.get("id"));
+                log.debug("Updating existing record with ID: {}", recordId);
             } else {
-                // Create new record with provided GUID (record doesn't exist yet)
+                // Create new record with search criteria as identifying fields
                 recordToSave = new HashMap<>(requestBody);
-                recordToSave.put("id", providedGuid);
+                // Use first search field value as ID, or generate new ID if not suitable
+                recordId = searchCriteria.values().iterator().next();
+                if (recordId == null || recordId.trim().isEmpty()) {
+                    recordId = UUID.randomUUID().toString();
+                }
+                recordToSave.put("id", recordId);
                 recordToSave.put("createdAt", new Date());
-                log.debug("Creating new record with provided GUID: {}", providedGuid);
+                log.debug("Creating new record with ID from search criteria: {}", recordId);
             }
             
             // Apply parameter mappings
             applyParameterMappings(route.getRequestConfig(), pathVars, queryParams, recordToSave);
             
-            // Save using provided GUID as record ID
-            saveRecordToCollection(route, providedGuid, recordToSave);
+            // Save using determined record ID
+            saveRecordToCollection(route, recordId, recordToSave);
             
             return recordToSave;
             
@@ -417,6 +431,74 @@ public class EnhancedDynamicEndpointController {
             
             return requestBody;
         }
+    }
+    
+    // NEW METHOD: Extract search criteria from updateCondition
+    private Map<String, String> extractSearchCriteriaFromCondition(String updateCondition, Map<String, Object> requestBody) {
+        Map<String, String> searchCriteria = new HashMap<>();
+        
+        if (updateCondition == null || requestBody == null) {
+            return searchCriteria;
+        }
+        
+        // Parse condition to extract field names
+        String[] conditions = updateCondition.split(" AND ");
+        
+        for (String condition : conditions) {
+            condition = condition.trim();
+            
+            if (condition.startsWith("body_has_field:")) {
+                String fieldName = condition.substring("body_has_field:".length()).trim();
+                Object fieldValue = requestBody.get(fieldName);
+                if (fieldValue != null && !fieldValue.toString().trim().isEmpty()) {
+                    searchCriteria.put(fieldName, fieldValue.toString());
+                }
+            }
+            // Add support for other condition types if needed
+        }
+        
+        return searchCriteria;
+    }
+    
+    // NEW METHOD: Find existing record using multiple search criteria
+    private Object findExistingRecord(String collection, Map<String, String> searchCriteria, String storageStrategy) {
+        if (searchCriteria.isEmpty()) {
+            return null;
+        }
+        
+        if ("individual_file".equals(storageStrategy)) {
+            // For individual file storage, try each search field as potential ID
+            for (String fieldValue : searchCriteria.values()) {
+                Object record = fileStorage.readItemFromCollection(collection, fieldValue, Map.class);
+                if (record != null) {
+                    return record;
+                }
+            }
+            return null;
+        } else {
+            // For collection file storage, search through all records
+            List<Map<String, Object>> items = fileStorage.readCollectionData(collection, 
+                new TypeReference<List<Map<String, Object>>>() {});
+            
+            return items.stream()
+                    .filter(item -> matchesSearchCriteria(item, searchCriteria))
+                    .findFirst()
+                    .orElse(null);
+        }
+    }
+    
+    // NEW METHOD: Check if record matches all search criteria
+    private boolean matchesSearchCriteria(Map<String, Object> record, Map<String, String> searchCriteria) {
+        for (Map.Entry<String, String> criteria : searchCriteria.entrySet()) {
+            String fieldName = criteria.getKey();
+            String expectedValue = criteria.getValue();
+            Object actualValue = record.get(fieldName);
+            
+            if (actualValue == null || !expectedValue.equals(actualValue.toString())) {
+                return false;
+            }
+        }
+        return true;
     }
     
     // Make evaluateCondition method public so controller can access it

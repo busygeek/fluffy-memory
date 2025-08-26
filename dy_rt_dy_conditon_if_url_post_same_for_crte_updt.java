@@ -109,25 +109,34 @@ public class EnhancedDynamicRouteService {
         
         // Then check for missing required fields (from field rules)
         if (requestBody != null && !requiredFieldsFromRules.isEmpty()) {
-            List<String> missingFields = new ArrayList<>();
+            // Build a map of field name to rule for quick lookup
+            Map<String, FieldRule> fieldRuleMap = new HashMap<>();
+            for (FieldRule rule : applicableRules) {
+                fieldRuleMap.put(rule.getFieldName(), rule);
+            }
+            
             for (String fieldName : requiredFieldsFromRules) {
                 if (!requestBody.containsKey(fieldName) || 
                     requestBody.get(fieldName) == null || 
                     requestBody.get(fieldName).toString().trim().isEmpty()) {
-                    missingFields.add(fieldName);
+                    
+                    // Return specific field rule response if configured
+                    FieldRule rule = fieldRuleMap.get(fieldName);
+                    if (rule != null && rule.getStatusCode() > 0) {
+                        return ValidationResult.failure(rule.getStatusCode(), rule.getMessage(), rule.getResponseBody());
+                    }
+                    
+                    // Fallback to generic response if no specific rule response
+                    String operation = isUpdateOperation ? "update" : "create";
+                    return ValidationResult.failure(400, 
+                        "Missing required field for " + operation + " operation: " + fieldName,
+                        Map.of(
+                            "error", "Missing required field",
+                            "operation", operation,
+                            "missing_field", fieldName,
+                            "message", "Field " + fieldName + " is required for " + operation + " operation"
+                        ));
                 }
-            }
-            
-            if (!missingFields.isEmpty()) {
-                String operation = isUpdateOperation ? "update" : "create";
-                return ValidationResult.failure(400, 
-                    "Missing required fields for " + operation + " operation: " + String.join(", ", missingFields),
-                    Map.of(
-                        "error", "Missing required fields",
-                        "operation", operation,
-                        "missing_fields", missingFields,
-                        "message", "Required fields for " + operation + " operation: " + String.join(", ", requiredFieldsFromRules)
-                    ));
             }
         }
         

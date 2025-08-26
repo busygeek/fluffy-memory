@@ -86,32 +86,31 @@ public class EnhancedDynamicRouteService {
             }
         }
         
-        // Validate required body parameters FIRST (based on operation type)
-        List<String> requiredFields = new ArrayList<>();
+        // First, validate field formats and collect required fields from rules
+        List<String> requiredFieldsFromRules = new ArrayList<>();
         
-        // Determine required fields based on operation type
-        if (isUpdateOperation) {
-            // For update operation, collect required fields from update rules
-            for (FieldRule rule : reqConfig.getFieldRules()) {
-                if (rule.getApplyToOperations() != null && 
-                    rule.getApplyToOperations().contains("update")) {
-                    requiredFields.add(rule.getFieldName());
+        if (requestBody != null && reqConfig.getFieldRules() != null) {
+            for (FieldRule rule : applicableRules) {
+                String fieldName = rule.getFieldName();
+                Object fieldValue = requestBody.get(fieldName);
+                
+                // If field is present, validate its format
+                if (fieldValue != null) {
+                    String stringValue = fieldValue.toString();
+                    if (!stringValue.matches(rule.getRegexPattern())) {
+                        return ValidationResult.failure(rule.getStatusCode(), rule.getMessage(), rule.getResponseBody());
+                    }
                 }
-            }
-        } else {
-            // For create operation, collect required fields from create rules
-            for (FieldRule rule : reqConfig.getFieldRules()) {
-                if (rule.getApplyToOperations() != null && 
-                    (rule.getApplyToOperations().contains("create") || rule.getApplyToOperations().contains("both"))) {
-                    requiredFields.add(rule.getFieldName());
-                }
+                
+                // Collect field as required if it has validation rules for current operation
+                requiredFieldsFromRules.add(fieldName);
             }
         }
         
-        // Check for missing required fields
-        if (requestBody != null && !requiredFields.isEmpty()) {
+        // Then check for missing required fields (from field rules)
+        if (requestBody != null && !requiredFieldsFromRules.isEmpty()) {
             List<String> missingFields = new ArrayList<>();
-            for (String fieldName : requiredFields) {
+            for (String fieldName : requiredFieldsFromRules) {
                 if (!requestBody.containsKey(fieldName) || 
                     requestBody.get(fieldName) == null || 
                     requestBody.get(fieldName).toString().trim().isEmpty()) {
@@ -127,21 +126,24 @@ public class EnhancedDynamicRouteService {
                         "error", "Missing required fields",
                         "operation", operation,
                         "missing_fields", missingFields,
-                        "message", "Required fields for " + operation + " operation: " + String.join(", ", requiredFields)
+                        "message", "Required fields for " + operation + " operation: " + String.join(", ", requiredFieldsFromRules)
                     ));
             }
         }
         
-        // Validate field formats using applicable rules
-        if (requestBody != null) {
-            for (FieldRule rule : applicableRules) {
-                Object fieldValue = requestBody.get(rule.getFieldName());
-                if (fieldValue != null) {
-                    String stringValue = fieldValue.toString();
-                    if (!stringValue.matches(rule.getRegexPattern())) {
-                        return ValidationResult.failure(rule.getStatusCode(), rule.getMessage(), rule.getResponseBody());
-                    }
+        // Finally, check any additional required fields from requiredBodyParams (if specified)
+        if (reqConfig.getRequiredBodyParams() != null && requestBody != null) {
+            List<String> missingFields = new ArrayList<>();
+            for (String fieldName : reqConfig.getRequiredBodyParams()) {
+                if (!requestBody.containsKey(fieldName) || 
+                    requestBody.get(fieldName) == null || 
+                    requestBody.get(fieldName).toString().trim().isEmpty()) {
+                    missingFields.add(fieldName);
                 }
+            }
+            
+            if (!missingFields.isEmpty()) {
+                return ValidationResult.failure(400, "Missing required parameters: " + String.join(", ", missingFields));
             }
         }
         

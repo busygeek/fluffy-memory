@@ -1,0 +1,13 @@
+﻿spring:
+  application:
+    name: rest-project
+server:
+  port: 8080
+springdoc:
+  api-docs:
+    path: /v3/api-docs
+  swagger-ui:
+    path: /swagger-ui.html
+logging:
+  level:
+    com.example.restproject: DEBUG

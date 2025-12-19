@@ -1,0 +1,9 @@
+# Ignore any file starting with dot (root or nested)
+**/.*
+**/*.iml
+
+# Ignore any folder starting with dot (root or nested)
+**/.*/
+
+# Ignore any folder named "target" at any depth
+**/target/

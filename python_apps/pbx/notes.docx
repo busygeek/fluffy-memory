@@ -1,0 +1,22 @@
+==============================================================
+                        CALL VECTOR
+==============================================================
+Number: 517                    Name: GBSC Main
+Multimedia? n    Attendant Vectoring? n    Meet-me Conf? n    Lock? n
+Basic? y         EAS? y    G3V4 Enhanced? y    ANI/II-Digits? y    ASAI Routing? y
+Prompting? y     LAI? y    G3V4 Adv Route? y   CINFO? y    BSR? y    Holidays? y
+Variables? y     3.0 Enhanced? y
+--------------------------------------------------------------
+01 wait-time     0    secs hearing ringback
+02 goto step     3         if ani                =    0
+03 goto step     16        if holiday            in   table 16
+04# announcement 3014581
+05 goto step     9         if unconditionally
+06 collect       1    digits after announcement 3014552  for none
+07 goto step     9         if digits             =    1
+08 route-to      number 16226                   cov n if digit   = 2
+09 collect       1    digits after announcement 3080086  for none
+10 route-to      number 16151                   cov n if digit   = 1
+11 route-to      number 16152                   cov n if digit   = 2
+12# route-to     number 16165                   cov n if digit   = 3
+==============================================================
